@@ -4,6 +4,7 @@ from . import sql
 class Sqlite3:
     def __init__(self, db_path):
         import sqlite3
+
         self.path = db_path
         self.CONN = sqlite3.connect(self.path)
 
@@ -24,10 +25,15 @@ class Sqlite3:
         with self.CONN as cur:
             c = cur.cursor()
             if columns is None or columns == "*":
-                columns = [el[1] for el in c.execute(f"PRAGMA table_info({table_name})").fetchall()]
+                columns = [
+                    el[1]
+                    for el in c.execute(f"PRAGMA table_info({table_name})").fetchall()
+                ]
             elif isinstance(columns, str):
                 columns = [columns]
-            query, args = sql.selectQ(table_name, columns, where=where, order_by=order_by)
+            query, args = sql.selectQ(
+                table_name, columns, where=where, order_by=order_by
+            )
             c.execute(query, args)
             res = (dict(zip(columns, vals)) for vals in c.fetchall())
             if transform is not None:

@@ -3,9 +3,11 @@
 ##  a) extremely general and fairly low-level
 ##  b) as portable as possible to different SQL engines
 
+
 def _where_dict_to_string(where):
-    qstr = " AND ".join(f"{k}=?" for k, v in  where.items())
+    qstr = " AND ".join(f"{k}=?" for k, v in where.items())
     return qstr, tuple(where.values())
+
 
 def _where_arr_to_string(where):
     queries = []
@@ -27,6 +29,7 @@ def _where_to_string(where):
     else:
         return None
 
+
 def join_to_string(join):
     if len(join) == 4:
         join_type, table, join_from, join_to = join
@@ -35,22 +38,26 @@ def join_to_string(join):
         table, join_from, join_to = join
         return f" LEFT JOIN {table} ON {join_from} = {join_to}"
 
+
 def where_to_string(where):
     res = _where_to_string(where)
     if res is not None:
         qstr, qvars = res
         return f" WHERE {qstr}", qvars
 
+
 def createQ(table_name, cols):
     return f"CREATE TABLE IF NOT EXISTS {table_name}({', '.join(cols)})"
+
 
 def insertQ(table_name, **args):
     ks = args.keys()
     vs = args.values()
     return (
         f"INSERT INTO {table_name} ({', '.join(ks)}) VALUES ({', '.join(['?' for v in vs])})",
-        tuple(vs)
+        tuple(vs),
     )
+
 
 def selectQ(table_name, columns, where=None, join=None, order_by=None):
     query = f"SELECT {', '.join(columns)} FROM {table_name}"
@@ -65,11 +72,12 @@ def selectQ(table_name, columns, where=None, join=None, order_by=None):
         query += f" ORDER BY {order_by}"
     return (query, args)
 
+
 def updateQ(table_name, **kwargs):
-    where = kwargs.get('where', None)
+    where = kwargs.get("where", None)
     where_str, where_args = ("", ())
     if where is not None:
-        del kwargs['where']
+        del kwargs["where"]
         where_str, where_args = where_to_string(where)
     query = f"UPDATE {table_name} SET {'=?,'.join(kwargs.keys())}=?"
 
