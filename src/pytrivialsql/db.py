@@ -1,4 +1,4 @@
-from pytrivialsql import sql
+from . import sql
 
 
 class Sqlite3:
