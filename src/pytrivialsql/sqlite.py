@@ -68,6 +68,8 @@ class Sqlite3:
                     el[1]
                     for el in c.execute(f"PRAGMA table_info({table_name})").fetchall()
                 ]
+            if not columns:
+                raise Exception(f"No such table {table_name}")
             elif isinstance(columns, str):
                 columns = [columns]
             query, args = sql.select_q(
