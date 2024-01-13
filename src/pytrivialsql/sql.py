@@ -1,7 +1,35 @@
-# General SQL infrastructure
-## This stuff should be
-##  a) extremely general and fairly low-level
-##  b) as portable as possible to different SQL engines
+"""
+pytrivialsql/sql.py
+
+General SQL infrastructure module designed to provide low-level
+and portable functionality across different SQL engines.
+
+This module includes functions for constructing SQL queries,
+handling WHERE clauses, creating and inserting into tables, and more.
+
+Functions:
+- _where_dict_to_string(where): Convert a dictionary-based
+ WHERE clause to a string representation.
+- _where_arr_to_string(where): Convert a list of WHERE clauses
+ to a string representation with OR conditions.
+- _where_to_string(where): General function to convert various
+ forms of WHERE clauses to string representations.
+- join_to_string(join): Convert a join specification to a
+ string representation for SQL queries.
+- where_to_string(where): Convert a WHERE clause to
+ a string representation suitable for appending to SQL queries.
+- create_q(table_name, cols): Generate a SQL CREATE TABLE query.
+- insert_q(table_name, **args): Generate a SQL INSERT INTO query.
+- select_q(table_name, columns, where=None, join=None, order_by=None):
+ Generate a SQL SELECT query.
+- update_q(table_name, **kwargs): Generate a SQL UPDATE query.
+- delete_q(table_name, where): Generate a SQL DELETE query.
+
+Note:
+- The WHERE clauses can be specified in various forms such as dictionaries,
+ lists, or tuples for flexibility.
+- The module aims to be general and portable across different SQL engines.
+"""
 
 
 def _where_dict_to_string(where):
@@ -22,35 +50,74 @@ def _where_arr_to_string(where):
 def _where_to_string(where):
     if isinstance(where, dict):
         return _where_dict_to_string(where)
-    elif isinstance(where, list):
+    if isinstance(where, list):
         return _where_arr_to_string(where)
-    elif isinstance(where, tuple) and len(where) == 3:
+    if isinstance(where, tuple) and len(where) == 3:
         return f"{where[0]} {where[1]} ?", (where[2],)
-    else:
-        return None
+    return None
 
 
 def join_to_string(join):
+    """
+    Converts a join specification into a SQL JOIN string.
+
+    Args:
+        join (tuple): A tuple representing the join specification. The tuple should have
+                      either 3 or 4 elements,
+                      depending on the type of join. The elements are as follows:
+                          - if len(join) == 4: (join_type, table, join_from, join_to)
+                          - if len(join) == 3: (table, join_from, join_to)
+                      If the join type is not explicitly provided, a LEFT JOIN is assumed.
+
+    Returns:
+        str or None: The SQL join string, or None if the join specification is invalid.
+
+    Examples:
+        join = ("INNER", "customers", "orders.customer_id", "customers.id")
+        join_to_string(join)
+        # Returns: "INNER JOIN customers ON orders.customer_id = customers.id"
+
+        join = ("products", "orders.product_id", "products.id")
+        join_to_string(join)
+        # Returns: "LEFT JOIN products ON orders.product_id = products.id"
+
+        join = ("invalid", "table", "from", "to")
+        join_to_string(join)
+        # Returns: None
+    """
     if len(join) == 4:
         join_type, table, join_from, join_to = join
         return f"{join_type} JOIN {table} ON {join_from} = {join_to}"
-    elif len(join) == 3:
+
+    if len(join) == 3:
         table, join_from, join_to = join
         return f" LEFT JOIN {table} ON {join_from} = {join_to}"
 
+    return None
+
 
 def where_to_string(where):
+    """Converts a `where` parameter to a string representation.
+
+    Args:
+        where (Any): The `where` parameter to convert.
+
+    Returns:
+        str or None: The string representation of the `where` parameter if it is not None,
+                     otherwise None.
+    """
     res = _where_to_string(where)
     if res is not None:
         qstr, qvars = res
         return f" WHERE {qstr}", qvars
+    return None
 
 
-def createQ(table_name, cols):
+def create_q(table_name, cols):
     return f"CREATE TABLE IF NOT EXISTS {table_name}({', '.join(cols)})"
 
 
-def insertQ(table_name, **args):
+def insert_q(table_name, **args):
     ks = args.keys()
     vs = args.values()
     return (
@@ -59,7 +126,7 @@ def insertQ(table_name, **args):
     )
 
 
-def selectQ(table_name, columns, where=None, join=None, order_by=None):
+def select_q(table_name, columns, where=None, join=None, order_by=None):
     query = f"SELECT {', '.join(columns)} FROM {table_name}"
     args = ()
     if join is not None:
@@ -73,7 +140,7 @@ def selectQ(table_name, columns, where=None, join=None, order_by=None):
     return (query, args)
 
 
-def updateQ(table_name, **kwargs):
+def update_q(table_name, **kwargs):
     where = kwargs.get("where", None)
     where_str, where_args = ("", ())
     if where is not None:
@@ -84,6 +151,6 @@ def updateQ(table_name, **kwargs):
     return query + where_str, tuple(kwargs.values()) + where_args
 
 
-def deleteQ(table_name, where):
+def delete_q(table_name, where):
     where_str, where_args = where_to_string(where)
     return f"DELETE FROM {table_name} {where_str}", where_args

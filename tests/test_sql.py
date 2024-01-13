@@ -34,10 +34,10 @@ class TestWhereToString(unittest.TestCase):
             sql._where_to_string([{"a": "blah", "b": "bleeh"},  ("a", "like", "something else")])
         )
 
-class TestCreateQ(unittest.TestCase):
+class TestCreate_q(unittest.TestCase):
     def test_string_rep(self):
         self.assertEqual(
-            sql.createQ(
+            sql.create_q(
                 "table_name",
                 ["column ID PRIMARY KEY",
                  "prop TEXT",
@@ -46,49 +46,49 @@ class TestCreateQ(unittest.TestCase):
             'CREATE TABLE IF NOT EXISTS table_name(column ID PRIMARY KEY, prop TEXT, propb INTEGER, created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL)'
         )
 
-class TestInsertQ(unittest.TestCase):
+class TestInsert_q(unittest.TestCase):
     def test_string_rep(self):
         self.assertEqual(
-            sql.insertQ("table_name", prop="Blah!"),
+            sql.insert_q("table_name", prop="Blah!"),
             ('INSERT INTO table_name (prop) VALUES (?)', ('Blah!',))
         )
         self.assertEqual(
-            sql.insertQ("table_name", prop="Blah!", propb=12),
+            sql.insert_q("table_name", prop="Blah!", propb=12),
             ('INSERT INTO table_name (prop, propb) VALUES (?, ?)', ('Blah!', 12))
         )
 
-class TestDeleteQ(unittest.TestCase):
+class TestDelete_q(unittest.TestCase):
     def test_string_rep(self):
         self.assertEqual(
             ('DELETE FROM table_name  WHERE id=?', (1,)),
-            sql.deleteQ("table_name", where={"id": 1})
+            sql.delete_q("table_name", where={"id": 1})
         )
 
-class TestUpdateQ(unittest.TestCase):
+class TestUpdate_q(unittest.TestCase):
     def test_string_rep(self):
         self.assertEqual(
             ('UPDATE table_name SET prop=?', ('Bleeh!',)),
-            sql.updateQ("table_name", prop="Bleeh!")
+            sql.update_q("table_name", prop="Bleeh!")
         )
         self.assertEqual(
             ('UPDATE table_name SET prop=? WHERE id=?', ('Bleeh!', 1)),
-            sql.updateQ("table_name", prop="Bleeh!", where={"id": 1})
+            sql.update_q("table_name", prop="Bleeh!", where={"id": 1})
         )
 
-class TestSelectQ(unittest.TestCase):
+class TestSelect_q(unittest.TestCase):
     def test_basic(self):
         self.assertEqual(
-            sql.selectQ("table_name", ["id", "prop", "propb"]),
+            sql.select_q("table_name", ["id", "prop", "propb"]),
             ('SELECT id, prop, propb FROM table_name', ())
         )
 
     def test_where(self):
         self.assertEqual(
-            sql.selectQ("table_name", ["id", "prop", "propb"], where={"a": 1}),
+            sql.select_q("table_name", ["id", "prop", "propb"], where={"a": 1}),
             ('SELECT id, prop, propb FROM table_name WHERE a=?', (1,))
         )
     def test_order_by(self):
         self.assertEqual(
-            sql.selectQ("table_name", ["id", "prop", "propb"], where={"a": 1}, order_by="prop"),
+            sql.select_q("table_name", ["id", "prop", "propb"], where={"a": 1}, order_by="prop"),
             ('SELECT id, prop, propb FROM table_name WHERE a=? ORDER BY prop', (1,))
         )
