@@ -32,9 +32,23 @@ Note:
 """
 
 
+def _where_dict_clause_to_string(k, v):
+    if type(v) in {set, tuple, list}:
+        val_list = ", ".join([f"'{val}'" for val in v])
+        return f"{k} IN ({val_list})", None
+    if v is None:
+        return f"{k} IS NULL", None
+    return f"{k}=?", v
+
+
 def _where_dict_to_string(where):
-    qstr = " AND ".join(f"{k}=?" for k, v in where.items())
-    return qstr, tuple(where.values())
+    qstrs = []
+    qvars = ()
+    for qstr, qvar in (_where_dict_clause_to_string(k, v) for k, v in where.items()):
+        qstrs.append(qstr)
+        if qvar:
+            qvars += (qvar,)
+    return " AND ".join(qstrs), qvars
 
 
 def _where_arr_to_string(where):
@@ -47,13 +61,21 @@ def _where_arr_to_string(where):
     return " OR ".join(queries), variables
 
 
+def _where_tup_to_string(where):
+    if len(where) == 3:
+        return f"{where[0]} {where[1]} ?", (where[2],)
+    if len(where) == 2 and where[0] == "NOT":
+        qstr, qvar = _where_to_string(where[1])
+        return f"NOT ({qstr})", qvar
+
+
 def _where_to_string(where):
     if isinstance(where, dict):
         return _where_dict_to_string(where)
     if isinstance(where, list):
         return _where_arr_to_string(where)
-    if isinstance(where, tuple) and len(where) == 3:
-        return f"{where[0]} {where[1]} ?", (where[2],)
+    if isinstance(where, tuple):
+        return _where_tup_to_string(where)
     return None
 
 
