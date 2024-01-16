@@ -34,7 +34,7 @@ Note:
 
 def _where_dict_clause_to_string(k, v):
     if type(v) in {set, tuple, list}:
-        val_list = ", ".join([f"'{val}'" for val in v])
+        val_list = ", ".join([f"'{val}'" for val in sorted(v)])
         return f"{k} IN ({val_list})", None
     if v is None:
         return f"{k} IS NULL", None
