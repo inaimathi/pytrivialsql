@@ -45,7 +45,21 @@ from . import sql
 class Sqlite3:
     def __init__(self, db_path):
         self.path = db_path
-        self._conn = sqlite3.connect(self.path)
+        self._conn = sqlite3.connect(
+            self.path, check_same_thread=not self.is_threadsafe()
+        )
+
+    def is_threadsafe(self):
+        mem = sqlite3.connect("file::memory:?cache=shared")
+        cur = mem.execute(
+            "select * from pragma_compile_options where compile_options like 'THREADSAFE=%'"
+        )
+        res = cur.fetchall()
+        cur.close()
+        try:
+            return res[0][0].split("=")[1] == "1"
+        except Exception:
+            False
 
     def drop(self, *table_names):
         with self._conn as cur:
