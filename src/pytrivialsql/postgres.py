@@ -48,7 +48,11 @@ class Postgres:
                 if isinstance(columns, str):
                     columns = [columns]
                 query, args = sql.select_q(
-                    table_name, columns, where=where, order_by=order_by
+                    table_name,
+                    columns,
+                    where=where,
+                    order_by=order_by,
+                    placeholder="%s",
                 )
                 cur.execute(query, args)
                 cols = [col.name for col in cur.description]
