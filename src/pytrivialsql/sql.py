@@ -1,81 +1,49 @@
-"""
-pytrivialsql/sql.py
-
-General SQL infrastructure module designed to provide low-level
-and portable functionality across different SQL engines.
-
-This module includes functions for constructing SQL queries,
-handling WHERE clauses, creating and inserting into tables, and more.
-
-Functions:
-- _where_dict_to_string(where): Convert a dictionary-based
- WHERE clause to a string representation.
-- _where_arr_to_string(where): Convert a list of WHERE clauses
- to a string representation with OR conditions.
-- _where_to_string(where): General function to convert various
- forms of WHERE clauses to string representations.
-- join_to_string(join): Convert a join specification to a
- string representation for SQL queries.
-- where_to_string(where): Convert a WHERE clause to
- a string representation suitable for appending to SQL queries.
-- create_q(table_name, cols): Generate a SQL CREATE TABLE query.
-- insert_q(table_name, **args): Generate a SQL INSERT INTO query.
-- select_q(table_name, columns, where=None, join=None, order_by=None):
- Generate a SQL SELECT query.
-- update_q(table_name, **kwargs): Generate a SQL UPDATE query.
-- delete_q(table_name, where): Generate a SQL DELETE query.
-
-Note:
-- The WHERE clauses can be specified in various forms such as dictionaries,
- lists, or tuples for flexibility.
-- The module aims to be general and portable across different SQL engines.
-"""
-
-
-def _where_dict_clause_to_string(k, v):
+def _where_dict_clause_to_string(k, v, placeholder):
     if type(v) in {set, tuple, list}:
         val_list = ", ".join([f"'{val}'" for val in sorted(v)])
         return f"{k} IN ({val_list})", None
     if v is None:
         return f"{k} IS NULL", None
-    return f"{k}=?", v
+    return f"{k}={placeholder}", v
 
 
-def _where_dict_to_string(where):
+def _where_dict_to_string(where, placeholder):
     qstrs = []
     qvars = ()
-    for qstr, qvar in (_where_dict_clause_to_string(k, v) for k, v in where.items()):
+    for qstr, qvar in (
+        _where_dict_clause_to_string(k, v, placeholder) for k, v in where.items()
+    ):
         qstrs.append(qstr)
         if qvar:
             qvars += (qvar,)
     return " AND ".join(qstrs), qvars
 
 
-def _where_arr_to_string(where):
+def _where_arr_to_string(where, placeholder):
     queries = []
     variables = ()
     for w in where:
-        q, v = _where_to_string(w)
+        q, v = _where_to_string(w, placeholder)
         queries += [f"({q})"]
         variables += v
     return " OR ".join(queries), variables
 
 
-def _where_tup_to_string(where):
+def _where_tup_to_string(where, placeholder):
     if len(where) == 3:
-        return f"{where[0]} {where[1]} ?", (where[2],)
+        return f"{where[0]} {where[1]} {placeholder}", (where[2],)
     if len(where) == 2 and where[0] == "NOT":
-        qstr, qvar = _where_to_string(where[1])
+        qstr, qvar = _where_to_string(where[1], placeholder)
         return f"NOT ({qstr})", qvar
 
 
-def _where_to_string(where):
+def _where_to_string(where, placeholder):
     if isinstance(where, dict):
-        return _where_dict_to_string(where)
+        return _where_dict_to_string(where, placeholder)
     if isinstance(where, list):
-        return _where_arr_to_string(where)
+        return _where_arr_to_string(where, placeholder)
     if isinstance(where, tuple):
-        return _where_tup_to_string(where)
+        return _where_tup_to_string(where, placeholder)
     return None
 
 
@@ -118,7 +86,7 @@ def join_to_string(join):
     return None
 
 
-def where_to_string(where):
+def where_to_string(where, placeholder=None):
     """Converts a `where` parameter to a string representation.
 
     Args:
@@ -128,7 +96,9 @@ def where_to_string(where):
         str or None: The string representation of the `where` parameter if it is not None,
                      otherwise None.
     """
-    res = _where_to_string(where)
+    if placeholder is None:
+        placeholder = "?"
+    res = _where_to_string(where, placeholder)
     if res is not None:
         qstr, qvars = res
         return f" WHERE {qstr}", qvars
@@ -140,21 +110,31 @@ def create_q(table_name, cols):
 
 
 def insert_q(table_name, **args):
+    placeholder = args.get("placeholder", "?")
+    returning = args.get("RETURNING", args.get("returning", None))
+    for k in ["placeholder", "RETURNING", "returning"]:
+        if k in args:
+            del args[k]
     ks = args.keys()
     vs = args.values()
+    ret_clause = f" RETURNING {', '.join(returning)}" if returning is not None else ""
     return (
-        f"INSERT INTO {table_name} ({', '.join(ks)}) VALUES ({', '.join(['?' for v in vs])})",
+        f"INSERT INTO {table_name} ({', '.join(ks)}) VALUES ({', '.join([placeholder for v in vs])}){ret_clause}",
         tuple(vs),
     )
 
 
-def select_q(table_name, columns, where=None, join=None, order_by=None):
+def select_q(
+    table_name, columns, where=None, join=None, order_by=None, placeholder=None
+):
+    if placeholder is None:
+        placeholder = "?"
     query = f"SELECT {', '.join(columns)} FROM {table_name}"
     args = ()
     if join is not None:
         query += join_to_string(join)
     if where is not None:
-        where_str, where_args = where_to_string(where)
+        where_str, where_args = where_to_string(where, placeholder)
         query += where_str
         args = where_args
     if order_by is not None:
@@ -163,16 +143,23 @@ def select_q(table_name, columns, where=None, join=None, order_by=None):
 
 
 def update_q(table_name, **kwargs):
+    placeholder = kwargs.get("placeholder", "?")
+    if "placeholder" in kwargs:
+        del kwargs["placeholder"]
     where = kwargs.get("where", None)
     where_str, where_args = ("", ())
     if where is not None:
         del kwargs["where"]
-        where_str, where_args = where_to_string(where)
-    query = f"UPDATE {table_name} SET {'=?,'.join(kwargs.keys())}=?"
+        where_str, where_args = where_to_string(where, placeholder)
+
+    sep = f"={placeholder},"
+    query = f"UPDATE {table_name} SET {sep.join(kwargs.keys())}={placeholder}"
 
     return query + where_str, tuple(kwargs.values()) + where_args
 
 
-def delete_q(table_name, where):
-    where_str, where_args = where_to_string(where)
+def delete_q(table_name, where, placeholder=None):
+    if placeholder is None:
+        placeholder = "?"
+    where_str, where_args = where_to_string(where, placeholder)
     return f"DELETE FROM {table_name} {where_str}", where_args
