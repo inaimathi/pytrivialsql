@@ -1,37 +1,3 @@
-"""
-pytrivialsql/sql.py
-
-General SQL infrastructure module designed to provide low-level
-and portable functionality across different SQL engines.
-
-This module includes functions for constructing SQL queries,
-handling WHERE clauses, creating and inserting into tables, and more.
-
-Functions:
-- _where_dict_to_string(where): Convert a dictionary-based
- WHERE clause to a string representation.
-- _where_arr_to_string(where): Convert a list of WHERE clauses
- to a string representation with OR conditions.
-- _where_to_string(where): General function to convert various
- forms of WHERE clauses to string representations.
-- join_to_string(join): Convert a join specification to a
- string representation for SQL queries.
-- where_to_string(where): Convert a WHERE clause to
- a string representation suitable for appending to SQL queries.
-- create_q(table_name, cols): Generate a SQL CREATE TABLE query.
-- insert_q(table_name, **args): Generate a SQL INSERT INTO query.
-- select_q(table_name, columns, where=None, join=None, order_by=None):
- Generate a SQL SELECT query.
-- update_q(table_name, **kwargs): Generate a SQL UPDATE query.
-- delete_q(table_name, where): Generate a SQL DELETE query.
-
-Note:
-- The WHERE clauses can be specified in various forms such as dictionaries,
- lists, or tuples for flexibility.
-- The module aims to be general and portable across different SQL engines.
-"""
-
-
 def _where_dict_clause_to_string(k, v, placeholder):
     if type(v) in {set, tuple, list}:
         val_list = ", ".join([f"'{val}'" for val in sorted(v)])
@@ -145,12 +111,15 @@ def create_q(table_name, cols):
 
 def insert_q(table_name, **args):
     placeholder = args.get("placeholder", "?")
-    if "placeholder" in args:
-        del args["placeholder"]
+    returning = args.get("RETURNING", args.get("returning", None))
+    for k in ["placeholder", "RETURNING", "returning"]:
+        if k in args:
+            del args[k]
     ks = args.keys()
     vs = args.values()
+    ret_clause = f" RETURNING {', '.join(returning)}" if returning is not None else ""
     return (
-        f"INSERT INTO {table_name} ({', '.join(ks)}) VALUES ({', '.join([placeholder for v in vs])})",
+        f"INSERT INTO {table_name} ({', '.join(ks)}) VALUES ({', '.join([placeholder for v in vs])}){ret_clause}",
         tuple(vs),
     )
 

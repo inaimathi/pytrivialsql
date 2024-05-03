@@ -105,6 +105,29 @@ class TestInsert_q(unittest.TestCase):
             ("INSERT INTO table_name (prop, propb) VALUES (?, ?)", ("Blah!", 12)),
         )
 
+    def test_returning_clause(self):
+        self.assertEqual(
+            sql.insert_q("users", prop="foo", propb="bar", RETURNING=["id"]),
+            (
+                "INSERT INTO users (prop, propb) VALUES (?, ?) RETURNING id",
+                ("foo", "bar"),
+            ),
+        )
+        self.assertEqual(
+            sql.insert_q("users", prop="foo", propb="bar", RETURNING=["id", "created"]),
+            (
+                "INSERT INTO users (prop, propb) VALUES (?, ?) RETURNING id, created",
+                ("foo", "bar"),
+            ),
+        )
+        self.assertEqual(
+            sql.insert_q("users", prop="foo", propb="bar", RETURNING="*"),
+            (
+                "INSERT INTO users (prop, propb) VALUES (?, ?) RETURNING *",
+                ("foo", "bar"),
+            ),
+        )
+
     def test_different_placeholder(self):
         self.assertEqual(
             sql.insert_q("table_name", prop="Blah!", propb=12, placeholder="%s"),
