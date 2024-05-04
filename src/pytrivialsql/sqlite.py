@@ -49,6 +49,15 @@ class Sqlite3:
             self.path, check_same_thread=not self.is_threadsafe()
         )
 
+    def exec(self, query, args=None):
+        with self._conn as cur:
+            cur.execute(query, args)
+
+    def execs(self, query_args_pairs):
+        with self._conn as cur:
+            for q, qargs in query_args_pairs:
+                cur.execute(q, qargs)
+
     def is_threadsafe(self):
         mem = sqlite3.connect("file::memory:?cache=shared")
         cur = mem.execute(

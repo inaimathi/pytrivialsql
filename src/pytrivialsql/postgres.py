@@ -25,6 +25,25 @@ class Postgres:
     def close(self):
         self._conn.close()
 
+    def exec(self, query, args=None):
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(query, args)
+            self._commit()
+        except Exception as e:
+            self._reconnect()
+            raise e
+
+    def execs(self, query_args_pairs):
+        try:
+            with self._conn.cursor() as cur:
+                for q, qargs in query_args_pairs:
+                    cur.execute(q, qargs)
+            self._commit()
+        except Exception as e:
+            self._reconnect()
+            raise e
+
     def drop(self, *table_names):
         try:
             with self._conn.cursor() as cur:
