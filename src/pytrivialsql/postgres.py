@@ -8,15 +8,17 @@ _JSON_TYPES = {list, dict}
 
 
 class Postgres:
-    def __init__(self, db_url):
+    def __init__(self, db_url, autocommit=False):
+        self._autocommit = autocommit
         self._url = db_url
         self._connect()
 
     def _commit(self):
-        self._conn.commit()
+        if not self._autocommit:
+            self._conn.commit()
 
     def _connect(self):
-        self._conn = psycopg.connect(self._url)
+        self._conn = psycopg.connect(self._url, autocommit=self._autocommit)
 
     def _reconnect(self):
         self.close()
