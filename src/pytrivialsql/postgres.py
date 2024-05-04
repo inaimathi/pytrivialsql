@@ -1,6 +1,10 @@
+import json
+
 import psycopg
 
 from . import sql
+
+_JSON_TYPES = {list, dict}
 
 
 class Postgres:
@@ -15,30 +19,27 @@ class Postgres:
         self._conn = psycopg.connect(self._url)
 
     def _reconnect(self):
-        self._close()
+        self.close()
         self._connect()
 
-    def _close(self):
+    def close(self):
         self._conn.close()
 
     def drop(self, *table_names):
         try:
             with self._conn.cursor() as cur:
                 for tbl in table_names:
-                    cur.execute(f'DROP TABLE "{tbl}"')
+                    cur.execute(sql.drop_q(tbl))
             self._commit()
         except Exception as e:
             self._reconnect()
             raise e
 
     def create(self, table_name, props):
-        try:
-            with self._conn.cursor() as cur:
-                cur.execute(sql.create_q(table_name, props))
+        with self._conn.cursor() as cur:
+            cur.execute(sql.create_q(table_name, props))
             self._commit()
             return True
-        except Exception:
-            return False
 
     def select(self, table_name, columns, where=None, order_by=None, transform=None):
         try:
@@ -65,9 +66,16 @@ class Postgres:
             raise e
 
     def insert(self, table_name, **args):
+        global _JSON_TYPES
         returning = args.get("returning", args.get("RETURNING", None))
         try:
             with self._conn.cursor() as cur:
+                for k, v in args.items():
+                    if k in {"returning", "RETURNING"}:
+                        if type(v) is str:
+                            args[k] = [v]
+                    if type(v) in _JSON_TYPES:
+                        args[k] = json.dumps(v)
                 args["placeholder"] = "%s"
                 q, qargs = sql.insert_q(table_name, **args)
                 cur.execute(q, qargs)
@@ -87,10 +95,14 @@ class Postgres:
             raise e
 
     def update(self, table_name, bindings, where):
+        global _JSON_TYPES
+        binds = {"placeholder": "%s", **bindings}
         try:
             with self._conn.cursor() as cur:
-                bindings["placeholder"] = "%s"
-                q, args = sql.update_q(table_name, where=where, **bindings)
+                for k, v in binds.items():
+                    if type(v) in _JSON_TYPES:
+                        binds[k] = json.dumps(v)
+                q, args = sql.update_q(table_name, where=where, **binds)
                 cur.execute(q, args)
             self._commit()
         except Exception as e:

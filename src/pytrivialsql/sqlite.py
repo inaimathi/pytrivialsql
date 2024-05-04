@@ -64,7 +64,7 @@ class Sqlite3:
     def drop(self, *table_names):
         with self._conn as cur:
             for tbl in table_names:
-                cur.execute(f"DROP TABLE {tbl}")
+                cur.execute(sql.drop_q(tbl))
 
     def create(self, table_name, props):
         try:

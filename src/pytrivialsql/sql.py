@@ -105,6 +105,10 @@ def where_to_string(where, placeholder=None):
     return None
 
 
+def drop_q(table_name):
+    return f"DROP TABLE IF EXISTS {table_name}"
+
+
 def create_q(table_name, cols):
     return f"CREATE TABLE IF NOT EXISTS {table_name}({', '.join(cols)})"
 
