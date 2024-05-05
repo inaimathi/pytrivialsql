@@ -211,3 +211,11 @@ class TestSelect_q(unittest.TestCase):
             ),
             ("SELECT id, prop, propb FROM table_name WHERE a=? ORDER BY prop", (1,)),
         )
+
+    def test_limit(self):
+        self.assertEqual(
+            sql.select_q(
+                "table_name", ["id", "prop", "propb"], where={"a": 1}, limit=2
+            ),
+            ("SELECT id, prop, propb FROM table_name WHERE a=? LIMIT 2", (1,)),
+        )

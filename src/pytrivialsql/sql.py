@@ -129,7 +129,13 @@ def insert_q(table_name, **args):
 
 
 def select_q(
-    table_name, columns, where=None, join=None, order_by=None, placeholder=None
+    table_name,
+    columns,
+    where=None,
+    join=None,
+    order_by=None,
+    limit=None,
+    placeholder=None,
 ):
     if placeholder is None:
         placeholder = "?"
@@ -143,6 +149,8 @@ def select_q(
         args = where_args
     if order_by is not None:
         query += f" ORDER BY {order_by}"
+    if limit is not None:
+        query += f" LIMIT {limit}"
     return (query, args)
 
 

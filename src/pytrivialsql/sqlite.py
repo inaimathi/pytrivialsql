@@ -83,7 +83,9 @@ class Sqlite3:
         except Exception:
             return False
 
-    def select(self, table_name, columns, where=None, order_by=None, transform=None):
+    def select(
+        self, table_name, columns, where=None, order_by=None, transform=None, limit=None
+    ):
         with self._conn as cur:
             c = cur.cursor()
             if columns is None or columns == "*":
@@ -96,7 +98,7 @@ class Sqlite3:
             elif isinstance(columns, str):
                 columns = [columns]
             query, args = sql.select_q(
-                table_name, columns, where=where, order_by=order_by
+                table_name, columns, where=where, order_by=order_by, limit=limit
             )
             c.execute(query, args)
             res = (dict(zip(columns, vals)) for vals in c.fetchall())

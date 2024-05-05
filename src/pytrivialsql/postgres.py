@@ -62,7 +62,9 @@ class Postgres:
             self._commit()
             return True
 
-    def select(self, table_name, columns, where=None, order_by=None, transform=None):
+    def select(
+        self, table_name, columns, where=None, order_by=None, limit=None, transform=None
+    ):
         try:
             with self._conn.cursor() as cur:
                 if columns is None:
@@ -74,6 +76,7 @@ class Postgres:
                     columns,
                     where=where,
                     order_by=order_by,
+                    limit=limit,
                     placeholder="%s",
                 )
                 cur.execute(query, args)
