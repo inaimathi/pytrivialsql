@@ -98,7 +98,7 @@ class Postgres:
                     if k in {"returning", "RETURNING"}:
                         if type(v) is str:
                             args[k] = [v]
-                    if type(v) in _JSON_TYPES:
+                    elif type(v) in _JSON_TYPES:
                         args[k] = json.dumps(v)
                 args["placeholder"] = "%s"
                 q, qargs = sql.insert_q(table_name, **args)

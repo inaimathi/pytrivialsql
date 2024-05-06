@@ -57,6 +57,13 @@ class TestDBInteraction(unittest.TestCase):
         rid = DB.insert("a_table", a_column="another row", RETURNING="id")
         self.assertIsInstance(rid, int)
 
+        rlist = DB.insert(
+            "a_table",
+            a_column="another row",
+            RETURNING=["id", "a_column", "a_json_column"],
+        )
+        self.assertIsInstance(rlist, list)
+
         DB.drop("a_table")
         with self.assertRaises(psycopg.errors.UndefinedTable):
             DB.select("a_table", "*")
