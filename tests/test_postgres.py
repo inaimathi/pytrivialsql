@@ -62,7 +62,7 @@ class TestDBInteraction(unittest.TestCase):
             a_column="another row",
             RETURNING=["id", "a_column", "a_json_column"],
         )
-        self.assertIsInstance(rlist, list)
+        self.assertIsInstance(rlist, dict)
 
         DB.drop("a_table")
         with self.assertRaises(psycopg.errors.UndefinedTable):
