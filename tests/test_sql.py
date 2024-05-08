@@ -145,13 +145,13 @@ class TestInsert_q(unittest.TestCase):
 class TestDelete_q(unittest.TestCase):
     def test_string_rep(self):
         self.assertEqual(
-            ("DELETE FROM table_name  WHERE id=?", (1,)),
+            ("DELETE FROM table_name WHERE id=?", (1,)),
             sql.delete_q("table_name", where={"id": 1}),
         )
 
     def test_placeholder_change(self):
         self.assertEqual(
-            ("DELETE FROM table_name  WHERE id=%s", (1,)),
+            ("DELETE FROM table_name WHERE id=%s", (1,)),
             sql.delete_q("table_name", where={"id": 1}, placeholder="%s"),
         )
 

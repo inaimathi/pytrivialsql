@@ -135,10 +135,13 @@ def select_q(
     join=None,
     order_by=None,
     limit=None,
+    offset=None,
     placeholder=None,
 ):
     if placeholder is None:
         placeholder = "?"
+    if type(columns) is str:
+        columns = [columns]
     query = f"SELECT {', '.join(columns)} FROM {table_name}"
     args = ()
     if join is not None:
@@ -151,6 +154,8 @@ def select_q(
         query += f" ORDER BY {order_by}"
     if limit is not None:
         query += f" LIMIT {limit}"
+    if offset is not None:
+        query += f" OFFSET {offset}"
     return (query, args)
 
 
@@ -174,4 +179,4 @@ def delete_q(table_name, where, placeholder=None):
     if placeholder is None:
         placeholder = "?"
     where_str, where_args = where_to_string(where, placeholder)
-    return f"DELETE FROM {table_name} {where_str}", where_args
+    return f"DELETE FROM {table_name}{where_str}", where_args

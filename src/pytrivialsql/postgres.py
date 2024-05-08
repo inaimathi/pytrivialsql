@@ -69,7 +69,7 @@ class Postgres:
             with self._conn.cursor() as cur:
                 if columns is None:
                     columns = "*"
-                if isinstance(columns, str):
+                if type(columns) is str:
                     columns = [columns]
                 query, args = sql.select_q(
                     table_name,
