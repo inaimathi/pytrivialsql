@@ -131,6 +131,8 @@ def insert_q(table_name, **args):
 def select_q(
     table_name,
     columns,
+    distinct=None,
+    distinct_on=None,
     where=None,
     join=None,
     order_by=None,
@@ -138,11 +140,24 @@ def select_q(
     offset=None,
     placeholder=None,
 ):
+    assert (
+        distinct is None or distinct_on is None
+    ), "Only one of DISTINCT or DISTINCT ON can be passed"
     if placeholder is None:
         placeholder = "?"
     if type(columns) is str:
         columns = [columns]
-    query = f"SELECT {', '.join(columns)} FROM {table_name}"
+
+    d_key = "DISTINCT" if distinct else "DISTINCT ON"
+    d_cols = distinct or distinct_on
+    dist = ""
+    if d_cols:
+        if type(d_cols) is str:
+            dist = f" {d_key} ({d_cols})"
+        else:
+            dist = f" {d_key} ({', '.join(d_cols)})"
+
+    query = f"SELECT{dist} {', '.join(columns)} FROM {table_name}"
     args = ()
     if join is not None:
         query += join_to_string(join)

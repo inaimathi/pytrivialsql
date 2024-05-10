@@ -63,7 +63,15 @@ class Postgres:
             return True
 
     def select(
-        self, table_name, columns, where=None, order_by=None, limit=None, transform=None
+        self,
+        table_name,
+        columns,
+        distinct=None,
+        where=None,
+        order_by=None,
+        limit=None,
+        offset=None,
+        transform=None,
     ):
         try:
             with self._conn.cursor() as cur:
@@ -75,8 +83,10 @@ class Postgres:
                     table_name,
                     columns,
                     where=where,
+                    distinct_on=distinct,
                     order_by=order_by,
                     limit=limit,
+                    offset=offset,
                     placeholder="%s",
                 )
                 cur.execute(query, args)

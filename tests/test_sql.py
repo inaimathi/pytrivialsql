@@ -219,3 +219,43 @@ class TestSelect_q(unittest.TestCase):
             ),
             ("SELECT id, prop, propb FROM table_name WHERE a=? LIMIT 2", (1,)),
         )
+
+    def test_offset(self):
+        self.assertEqual(
+            sql.select_q(
+                "table_name", ["id", "prop", "propb"], where={"a": 1}, offset=5
+            ),
+            ("SELECT id, prop, propb FROM table_name WHERE a=? OFFSET 5", (1,)),
+        )
+
+    def test_distinct(self):
+        self.assertEqual(
+            sql.select_q(
+                "table_name", ["id", "prop", "propb"], where={"a": 1}, distinct="prop"
+            ),
+            ("SELECT DISTINCT (prop) id, prop, propb FROM table_name WHERE a=?", (1,)),
+        )
+        self.assertEqual(
+            sql.select_q(
+                "table_name",
+                ["id", "prop", "propb"],
+                where={"a": 1},
+                distinct_on="prop",
+            ),
+            (
+                "SELECT DISTINCT ON (prop) id, prop, propb FROM table_name WHERE a=?",
+                (1,),
+            ),
+        )
+        self.assertEqual(
+            sql.select_q(
+                "table_name",
+                ["id", "prop", "propb"],
+                where={"a": 1},
+                distinct_on=["prop", "propb"],
+            ),
+            (
+                "SELECT DISTINCT ON (prop, propb) id, prop, propb FROM table_name WHERE a=?",
+                (1,),
+            ),
+        )
