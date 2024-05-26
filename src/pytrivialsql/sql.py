@@ -113,6 +113,10 @@ def create_q(table_name, cols):
     return f"CREATE TABLE IF NOT EXISTS {table_name}({', '.join(cols)})"
 
 
+def add_column_q(table_name, col):
+    return f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col}"
+
+
 def insert_q(table_name, **args):
     placeholder = args.get("placeholder", "?")
     returning = args.get("RETURNING", args.get("returning", None))

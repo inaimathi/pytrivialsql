@@ -44,6 +44,14 @@ class Sqlite3:
         except Exception:
             return False
 
+    def add_column(self, table_name, col):
+        try:
+            with self._conn as cur:
+                cur.execute(sql.add_column_q(table_name, col))
+                return True
+        except Exception:
+            return False
+
     def select(
         self,
         table_name,

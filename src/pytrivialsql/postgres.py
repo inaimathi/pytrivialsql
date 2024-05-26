@@ -62,6 +62,12 @@ class Postgres:
             self._commit()
             return True
 
+    def add_column(self, table_name, col):
+        with self._conn.cursor() as cur:
+            cur.execute(sql.add_column_q(table_name, col))
+            self._commit()
+            return True
+
     def select(
         self,
         table_name,
