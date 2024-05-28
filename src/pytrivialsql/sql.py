@@ -1,5 +1,5 @@
 def _where_dict_clause_to_string(k, v, placeholder):
-    if type(v) in {set, tuple, list}:
+    if type(v) in {set, list}:
         val_list = ", ".join([f"'{val}'" for val in sorted(v)])
         return f"{k} IN ({val_list})", None
     if v is None:
@@ -29,9 +29,21 @@ def _where_arr_to_string(where, placeholder):
     return " OR ".join(queries), variables
 
 
+def _where_and_to_string(where, placeholder):
+    qstrs = []
+    qvars = ()
+    for clause in where[1:]:
+        qstr, qvar = _where_to_string(clause, placeholder)
+        qstrs.append(qstr)
+        qvars += qvar
+    return " AND ".join(qstrs), qvars
+
+
 def _where_tup_to_string(where, placeholder):
+    if where[0] == "AND":
+        return _where_and_to_string(where, placeholder)
     if len(where) == 3:
-        return f"{where[0]} {where[1]} {placeholder}", (where[2],)
+        return (f"{where[0]} {where[1]} {placeholder}", (where[2],))
     if len(where) == 2 and where[0] == "NOT":
         qstr, qvar = _where_to_string(where[1], placeholder)
         return f"NOT ({qstr})", qvar

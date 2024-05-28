@@ -47,6 +47,20 @@ class TestWhereToString(unittest.TestCase):
             sql._where_tup_to_string(("a", "like", "b", "c"), placeholder="?")
         )
 
+        self.assertEqual(
+            sql._where_tup_to_string(("AND", {"a": 1}), placeholder="?"), ("a=?", (1,))
+        )
+        self.assertEqual(
+            sql._where_tup_to_string(("AND", {"a": 1}, {"b": 2}), placeholder="?"),
+            ("a=? AND b=?", (1, 2)),
+        )
+        self.assertEqual(
+            sql._where_tup_to_string(
+                ("AND", {"a": 1}, {"b": 2}, {"c": 3}), placeholder="?"
+            ),
+            ("a=? AND b=? AND c=?", (1, 2, 3)),
+        )
+
     def test_where(self):
         self.assertEqual(
             ("(a=?) OR (a like ?)", ("blah", "something else")),
