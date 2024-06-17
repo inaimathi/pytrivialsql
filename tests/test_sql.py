@@ -20,6 +20,18 @@ class TestWhereToString(unittest.TestCase):
             ("a IS NULL", ()), sql._where_dict_to_string({"a": None}, placeholder="?")
         )
 
+    def test_where_dict_on_booleans_and_tuple_subclauses(self):
+        self.assertEqual(
+            ("a=? AND b=?", (1, False)),
+            sql._where_dict_to_string({"a": 1, "b": False}, placeholder="?"),
+        )
+        self.assertEqual(
+            ("a=? AND b=? AND c >= ?", (1, False, 3)),
+            sql._where_dict_to_string(
+                {"a": 1, "b": False, "c": (">=", 3)}, placeholder="?"
+            ),
+        )
+
     def test_where_arr(self):
         self.assertEqual(
             ("(a=?)", (1,)), sql._where_arr_to_string([{"a": 1}], placeholder="?")

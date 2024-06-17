@@ -2,6 +2,8 @@ def _where_dict_clause_to_string(k, v, placeholder):
     if type(v) in {set, list}:
         val_list = ", ".join([f"'{val}'" for val in sorted(v)])
         return f"{k} IN ({val_list})", None
+    if type(v) is tuple and len(v) == 2:
+        return f"{k} {v[0]} {placeholder}", v[1]
     if v is None:
         return f"{k} IS NULL", None
     return f"{k}={placeholder}", v
@@ -14,7 +16,7 @@ def _where_dict_to_string(where, placeholder):
         _where_dict_clause_to_string(k, v, placeholder) for k, v in where.items()
     ):
         qstrs.append(qstr)
-        if qvar:
+        if qvar is not None:
             qvars += (qvar,)
     return " AND ".join(qstrs), qvars
 
