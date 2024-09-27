@@ -8,7 +8,7 @@ _JSON_TYPES = {list, dict}
 
 
 class Postgres:
-    def __init__(self, db_url, autocommit=False):
+    def __init__(self, db_url, autocommit=True):
         self._autocommit = autocommit
         self._url = db_url
         self._connect()
@@ -104,6 +104,8 @@ class Postgres:
         except Exception as e:
             self._reconnect()
             raise e
+        finally:
+            self._commit()
 
     def insert(self, table_name, **args):
         global _JSON_TYPES
