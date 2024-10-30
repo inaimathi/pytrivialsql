@@ -184,11 +184,12 @@ def select_q(
         query += where_str
         args = where_args
     if order_by is not None:
-        query += f" ORDER BY {order_by}"
+        order_parts = [part.split(';')[0].strip() for part in order_by.split(',')]
+        query += f" ORDER BY {', '.join(order_parts)}"
     if limit is not None:
-        query += f" LIMIT {limit}"
+        query += f" LIMIT {str(limit).split(';')[0]}"
     if offset is not None:
-        query += f" OFFSET {offset}"
+        query += f" OFFSET {str(offset).split(';')[0]}" 
     return (query, args)
 
 
