@@ -76,6 +76,7 @@ class Postgres:
         where=None,
         order_by=None,
         limit=None,
+        join=None,
         offset=None,
         transform=None,
     ):
@@ -92,6 +93,7 @@ class Postgres:
                     distinct_on=distinct,
                     order_by=order_by,
                     limit=limit,
+                    join=join,
                     offset=offset,
                     placeholder="%s",
                 )

@@ -60,6 +60,7 @@ class Sqlite3:
         where=None,
         order_by=None,
         limit=None,
+        join=None,
         offset=None,
         transform=None,
     ):
@@ -80,6 +81,7 @@ class Sqlite3:
                 where=where,
                 distinct=distinct,
                 order_by=order_by,
+                join=join,
                 limit=limit,
                 offset=offset,
             )
