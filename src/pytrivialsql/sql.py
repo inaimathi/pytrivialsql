@@ -1,7 +1,25 @@
+def _in_clause_for_seq(col, seq, placeholder):
+    vals = list(seq)
+    non_null = [v for v in vals if v is not None]
+    has_null = any(v is None for v in vals)
+
+    if not non_null and has_null:
+        return f"{col} IS NULL", ()
+
+    if not non_null:
+        # Empty list, no NULLs: match nothing
+        return "1=0", ()
+
+    placeholders = ", ".join([placeholder] * len(non_null))
+    base = f"{col} IN ({placeholders})"
+    if has_null:
+        return f"({base} OR {col} IS NULL)", tuple(non_null)
+    return base, tuple(non_null)
+
+
 def _where_dict_clause_to_string(k, v, placeholder):
     if type(v) in {set, list}:
-        val_list = ", ".join([f"'{val}'" for val in sorted(v)])
-        return f"{k} IN ({val_list})", None
+        return _in_clause_for_seq(k, v, placeholder)
     if type(v) is tuple and len(v) == 2:
         return f"{k} {v[0]} {placeholder}", v[1]
     if v is None:
@@ -17,7 +35,11 @@ def _where_dict_to_string(where, placeholder):
     ):
         qstrs.append(qstr)
         if qvar is not None:
-            qvars += (qvar,)
+            # ensure tuple concatenation
+            if isinstance(qvar, tuple):
+                qvars += qvar
+            else:
+                qvars += (qvar,)
     return " AND ".join(qstrs), qvars
 
 
@@ -62,54 +84,16 @@ def _where_to_string(where, placeholder):
 
 
 def join_to_string(join):
-    """
-    Converts a join specification into a SQL JOIN string.
-
-    Args:
-        join (tuple): A tuple representing the join specification. The tuple should have
-                      either 3 or 4 elements,
-                      depending on the type of join. The elements are as follows:
-                          - if len(join) == 4: (join_type, table, join_from, join_to)
-                          - if len(join) == 3: (table, join_from, join_to)
-                      If the join type is not explicitly provided, a LEFT JOIN is assumed.
-
-    Returns:
-        str or None: The SQL join string, or None if the join specification is invalid.
-
-    Examples:
-        join = ("INNER", "customers", "orders.customer_id", "customers.id")
-        join_to_string(join)
-        # Returns: "INNER JOIN customers ON orders.customer_id = customers.id"
-
-        join = ("products", "orders.product_id", "products.id")
-        join_to_string(join)
-        # Returns: "LEFT JOIN products ON orders.product_id = products.id"
-
-        join = ("invalid", "table", "from", "to")
-        join_to_string(join)
-        # Returns: None
-    """
     if len(join) == 4:
         join_type, table, join_from, join_to = join
         return f"{join_type} JOIN {table} ON {join_from} = {join_to}"
-
     if len(join) == 3:
         table, join_from, join_to = join
         return f" LEFT JOIN {table} ON {join_from} = {join_to}"
-
     return None
 
 
 def where_to_string(where, placeholder=None):
-    """Converts a `where` parameter to a string representation.
-
-    Args:
-        where (Any): The `where` parameter to convert.
-
-    Returns:
-        str or None: The string representation of the `where` parameter if it is not None,
-                     otherwise None.
-    """
     if placeholder is None:
         placeholder = "?"
     res = _where_to_string(where, placeholder)
@@ -131,17 +115,25 @@ def add_column_q(table_name, col):
     return f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col}"
 
 
+def index_q(index_name, table_name, columns, unique=False):
+    if isinstance(columns, str):
+        columns = [columns]
+    uniq = "UNIQUE " if unique else ""
+    cols = ", ".join(columns)
+    return f"CREATE {uniq}INDEX IF NOT EXISTS {index_name} ON {table_name} ({cols})"
+
+
 def insert_q(table_name, **args):
     placeholder = args.get("placeholder", "?")
     returning = args.get("RETURNING", args.get("returning", None))
     for k in ["placeholder", "RETURNING", "returning"]:
         if k in args:
             del args[k]
-    ks = args.keys()
-    vs = args.values()
+    ks = list(args.keys())
+    vs = list(args.values())
     ret_clause = f" RETURNING {', '.join(returning)}" if returning is not None else ""
     return (
-        f"INSERT INTO {table_name} ({', '.join(ks)}) VALUES ({', '.join([placeholder for v in vs])}){ret_clause}",
+        f"INSERT INTO {table_name} ({', '.join(ks)}) VALUES ({', '.join([placeholder for _ in vs])}){ret_clause}",
         tuple(vs),
     )
 
@@ -184,12 +176,12 @@ def select_q(
         query += where_str
         args = where_args
     if order_by is not None:
-        order_parts = [part.split(';')[0].strip() for part in order_by.split(',')]
+        order_parts = [part.split(";")[0].strip() for part in order_by.split(",")]
         query += f" ORDER BY {', '.join(order_parts)}"
     if limit is not None:
         query += f" LIMIT {str(limit).split(';')[0]}"
     if offset is not None:
-        query += f" OFFSET {str(offset).split(';')[0]}" 
+        query += f" OFFSET {str(offset).split(';')[0]}"
     return (query, args)
 
 

@@ -68,6 +68,27 @@ class Postgres:
             self._commit()
             return True
 
+    def index(self, index_name, table_name, columns, unique=False, concurrently=False):
+        """
+        Create an index. If concurrently=True, uses CONCURRENTLY (requires autocommit).
+        """
+        if isinstance(columns, str):
+            columns = [columns]
+        cols = ", ".join(columns)
+        uniq = "UNIQUE " if unique else ""
+        if concurrently:
+            q = f"CREATE {uniq}INDEX CONCURRENTLY IF NOT EXISTS {index_name} ON {table_name} ({cols})"
+        else:
+            q = sql.index_q(index_name, table_name, columns, unique=unique)
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(q)
+            self._commit()
+            return True
+        except Exception as e:
+            self._reconnect()
+            raise e
+
     def select(
         self,
         table_name,
@@ -114,9 +135,9 @@ class Postgres:
         returning = args.get("returning", args.get("RETURNING", None))
         try:
             with self._conn.cursor() as cur:
-                for k, v in args.items():
+                for k, v in list(args.items()):
                     if k in {"returning", "RETURNING"}:
-                        if type(v) is str:
+                        if isinstance(v, str):
                             args[k] = [v]
                     elif type(v) in _JSON_TYPES:
                         args[k] = json.dumps(v)
@@ -143,7 +164,7 @@ class Postgres:
         binds = {"placeholder": "%s", **bindings}
         try:
             with self._conn.cursor() as cur:
-                for k, v in binds.items():
+                for k, v in list(binds.items()):
                     if type(v) in _JSON_TYPES:
                         binds[k] = json.dumps(v)
                 q, args = sql.update_q(table_name, where=where, **binds)

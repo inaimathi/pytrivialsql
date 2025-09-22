@@ -12,7 +12,7 @@ class Sqlite3:
 
     def exec(self, query, args=None):
         with self._conn as cur:
-            cur.execute(query, args)
+            cur.execute(query, args or ())
 
     def execs(self, query_args_pairs):
         with self._conn as cur:
@@ -29,7 +29,7 @@ class Sqlite3:
         try:
             return res[0][0].split("=")[1] == "1"
         except Exception:
-            False
+            return False
 
     def drop(self, *table_names):
         with self._conn as cur:
@@ -49,6 +49,17 @@ class Sqlite3:
             with self._conn as cur:
                 cur.execute(sql.add_column_q(table_name, col))
                 return True
+        except Exception:
+            return False
+
+    def index(self, index_name, table_name, columns, unique=False):
+        """
+        SQLite CREATE INDEX IF NOT EXISTS.
+        """
+        try:
+            with self._conn as cur:
+                cur.execute(sql.index_q(index_name, table_name, columns, unique=unique))
+            return True
         except Exception:
             return False
 
