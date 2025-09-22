@@ -20,6 +20,23 @@ class TestDBInteraction(unittest.TestCase):
                 "created TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()",
             ],
         )
+
+        # Create a couple of indexes and assert they exist
+        self.assertTrue(DB.index("idx_a_table_a_column", "a_table", ["a_column"]))
+        self.assertTrue(
+            DB.index("idx_a_table_a_number_column", "a_table", ["a_number_column"])
+        )
+
+        idx_rows = DB.select(
+            "pg_indexes",
+            ["indexname", "tablename"],
+            where={"tablename": "a_table"},
+            order_by="indexname",
+        )
+        idx_names = {r["indexname"] for r in idx_rows}
+        self.assertIn("idx_a_table_a_column", idx_names)
+        self.assertIn("idx_a_table_a_number_column", idx_names)
+
         self.assertEqual([], DB.select("a_table", "*"))
         res = DB.insert(
             "a_table",
@@ -54,6 +71,7 @@ class TestDBInteraction(unittest.TestCase):
         self.assertEqual(select_res[0]["a_column"], "a row")
         self.assertFalse(select_res[0]["another_column"])
 
+        # RETURNING single and multi-field
         rid = DB.insert("a_table", a_column="another row", RETURNING="id")
         self.assertIsInstance(rid, int)
 
@@ -63,6 +81,15 @@ class TestDBInteraction(unittest.TestCase):
             RETURNING=["id", "a_column", "a_json_column"],
         )
         self.assertIsInstance(rlist, dict)
+
+        # Exercise the parameterized IN (...) path via where={"a_number_column": [42, 999]}
+        in_rows = DB.select(
+            "a_table",
+            ["id", "a_number_column"],
+            where={"a_number_column": [42, 999]},
+            order_by="id",
+        )
+        self.assertTrue(any(r["a_number_column"] == 42 for r in in_rows))
 
         DB.drop("a_table")
         with self.assertRaises(psycopg.errors.UndefinedTable):

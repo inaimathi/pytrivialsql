@@ -12,10 +12,26 @@ class TestWhereToString(unittest.TestCase):
             ("a=? AND b=?", (1, 2)),
             sql._where_dict_to_string({"a": 1, "b": 2}, placeholder="?"),
         )
-        self.assertEqual(
-            ("a=? AND b IN ('A', 'B')", (1,)),
-            sql._where_dict_to_string({"a": 1, "b": {"A", "B"}}, placeholder="?"),
+
+        # New: parameterized IN (...) with deterministic order by using a list
+        q, args = sql._where_dict_to_string({"a": 1, "b": ["A", "B"]}, placeholder="?")
+        self.assertEqual(q, "a=? AND b IN (?, ?)")
+        self.assertEqual(args[0], 1)
+        self.assertEqual(set(args[1:]), {"A", "B"})
+
+        # New: IN list containing only NULL -> "b IS NULL"
+        q, args = sql._where_dict_to_string({"a": 1, "b": [None]}, placeholder="?")
+        self.assertEqual(q, "a=? AND b IS NULL")
+        self.assertEqual(args, (1,))
+
+        # New: IN list mixing values and NULL -> "(b IN (?, ?) OR b IS NULL)"
+        q, args = sql._where_dict_to_string(
+            {"a": 1, "b": [None, "X", "Y"]}, placeholder="?"
         )
+        self.assertEqual(q, "a=? AND (b IN (?, ?) OR b IS NULL)")
+        self.assertEqual(args[0], 1)
+        self.assertEqual(set(args[1:]), {"X", "Y"})
+
         self.assertEqual(
             ("a IS NULL", ()), sql._where_dict_to_string({"a": None}, placeholder="?")
         )

@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 
@@ -8,11 +9,35 @@ class TestDBInteraction(unittest.TestCase):
     def test_basic_interactions(self):
         with tempfile.NamedTemporaryFile(suffix=".db") as f:
             db = sqlite.Sqlite3(f.name)
-            self.assertTrue(db.create("a_table", [
-                "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL",
-                "a_column TEXT", "a_number_column INTEGER",
-                "a_boolean_column INTEGER",
-                "created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL"
-            ]))
-            rwid = db.insert("a_table", a_column="A Value", a_number_column=42, a_boolean_column=True)
-            rw = db.select("a_table", "*", where={"id": rwid})
+            self.assertTrue(
+                db.create(
+                    "a_table",
+                    [
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL",
+                        "a_column TEXT",
+                        "a_number_column INTEGER",
+                        "a_boolean_column INTEGER",
+                        "created DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL",
+                    ],
+                )
+            )
+
+            # Index creation and verification
+            self.assertTrue(db.index("idx_a_table_a_column", "a_table", ["a_column"]))
+            self.assertTrue(
+                db.index("idx_a_table_a_number_column", "a_table", ["a_number_column"])
+            )
+
+            # Introspect indexes directly via PRAGMA
+            cur = db._conn.execute("PRAGMA index_list('a_table')")
+            idx_names = {row[1] for row in cur.fetchall()}  # row[1] is name
+            self.assertIn("idx_a_table_a_column", idx_names)
+            self.assertIn("idx_a_table_a_number_column", idx_names)
+
+            rwid = db.insert(
+                "a_table", a_column="A Value", a_number_column=42, a_boolean_column=True
+            )
+
+            # Parameterized IN (...) path sanity check at driver level
+            rows = db.select("a_table", "*", where={"id": [rwid, -1]})
+            self.assertTrue(any(r["id"] == rwid for r in rows))
