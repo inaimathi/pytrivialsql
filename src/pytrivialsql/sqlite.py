@@ -1,6 +1,9 @@
+import re
 import sqlite3
 
 from . import sql
+
+_COLNAME_RE = re.compile(r'^\s*(?:[`"\[])?([A-Za-z_][A-Za-z0-9_]*)')
 
 
 class Sqlite3:
@@ -44,11 +47,26 @@ class Sqlite3:
         except Exception:
             return False
 
-    def add_column(self, table_name, col):
+    def _column_exists(self, table_name, column_name):
+        cur = self._conn.execute(f"PRAGMA table_info({table_name})")
         try:
-            with self._conn as cur:
-                cur.execute(sql.add_column_q(table_name, col))
-                return True
+            return any(row[1] == column_name for row in cur.fetchall())  # row[1] = name
+        finally:
+            cur.close()
+
+    def _extract_colname(self, col_def):
+        # Handles:  foo TEXT,  "Foo Bar" TEXT,  `foo` INT,  [foo] TEXT, etc.
+        m = _COLNAME_RE.match(col_def)
+        return m.group(1) if m else col_def.strip().split()[0]
+
+    def add_column(self, table_name, col_def):
+        col_name = self._extract_colname(col_def)
+        try:
+            if self._column_exists(table_name, col_name):
+                return True  # idempotent: column already present
+            with self._conn as conn:
+                conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_def}")
+            return True
         except Exception:
             return False
 

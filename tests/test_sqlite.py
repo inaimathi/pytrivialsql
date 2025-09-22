@@ -41,3 +41,12 @@ class TestDBInteraction(unittest.TestCase):
             # Parameterized IN (...) path sanity check at driver level
             rows = db.select("a_table", "*", where={"id": [rwid, -1]})
             self.assertTrue(any(r["id"] == rwid for r in rows))
+
+    def test_sqlite_add_column_idempotent(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as f:
+            db = sqlite.Sqlite3(f.name)
+            self.assertTrue(db.create("t", ["id INTEGER PRIMARY KEY"]))
+            self.assertTrue(db.add_column("t", "a_column TEXT"))
+            self.assertTrue(db.add_column("t", "a_column TEXT"))  # second time no-op
+            cols = [r[1] for r in db._conn.execute("PRAGMA table_info(t)").fetchall()]
+            self.assertIn("a_column", cols)
