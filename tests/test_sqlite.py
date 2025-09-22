@@ -38,6 +38,18 @@ class TestDBInteraction(unittest.TestCase):
                 "a_table", a_column="A Value", a_number_column=42, a_boolean_column=True
             )
 
+            self.assertTrue(
+                db.unique(
+                    "uniq_a_table_pair", "a_table", ["a_column", "a_number_column"]
+                )
+            )
+            # idempotent
+            self.assertTrue(
+                db.unique(
+                    "uniq_a_table_pair", "a_table", ["a_column", "a_number_column"]
+                )
+            )
+
             # Parameterized IN (...) path sanity check at driver level
             rows = db.select("a_table", "*", where={"id": [rwid, -1]})
             self.assertTrue(any(r["id"] == rwid for r in rows))

@@ -89,6 +89,64 @@ class Postgres:
             self._reconnect()
             raise e
 
+    def unique(self, index_name, table_name, columns, concurrently=False):
+        """
+        Ensure a unique index exists on (columns) for table_name.
+        Returns True if the index already existed or was created.
+
+        columns: str | list[str]
+        """
+        if isinstance(columns, str):
+            columns = [columns]
+
+        # Check if an equivalent UNIQUE index already exists (any name)
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT indexname, indexdef
+                    FROM pg_indexes
+                    WHERE tablename = %s
+                    """,
+                    (table_name,),
+                )
+                for idxname, idxdef in cur.fetchall():
+                    if "UNIQUE" not in idxdef:
+                        continue
+                    # Very simple parse of column list from "... ON table (col1, col2, ...)"
+                    lpar = idxdef.find("(")
+                    rpar = idxdef.rfind(")")
+                    if lpar != -1 and rpar != -1 and rpar > lpar:
+                        def_cols = [
+                            c.strip().strip('"')
+                            for c in idxdef[lpar + 1 : rpar].split(",")
+                        ]
+                        if def_cols == columns:
+                            return True  # already have a matching UNIQUE index
+
+            # Create it
+            if concurrently:
+                if not self._autocommit:
+                    raise ValueError(
+                        "CREATE INDEX CONCURRENTLY requires autocommit=True"
+                    )
+                q = (
+                    f"CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+                    f"{index_name} ON {table_name} ({', '.join(columns)})"
+                )
+            else:
+                # Reuse the generic builder
+                q = sql.index_q(index_name, table_name, columns, unique=True)
+
+            with self._conn.cursor() as cur:
+                cur.execute(q)
+                self._commit()
+            return True
+
+        except Exception as e:
+            self._reconnect()
+            raise e
+
     def select(
         self,
         table_name,

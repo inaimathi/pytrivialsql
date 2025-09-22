@@ -81,6 +81,39 @@ class Sqlite3:
         except Exception:
             return False
 
+    def unique(self, index_name, table_name, columns):
+        """
+        Ensure a unique index exists on (columns) for table_name.
+        Returns True if the index already existed or was created.
+
+        columns: str | list[str]
+        """
+        if isinstance(columns, str):
+            columns = [columns]
+
+        try:
+            # 1) Check existing UNIQUE indexes on this table
+            cur = self._conn.execute(f"PRAGMA index_list('{table_name}')")
+            idx_rows = cur.fetchall()
+            cur.close()
+
+            for _, idx_name, is_unique, *_ in idx_rows:
+                if not is_unique:
+                    continue
+                icur = self._conn.execute(f"PRAGMA index_info('{idx_name}')")
+                col_rows = icur.fetchall()  # seqno, cid, name
+                icur.close()
+                existing_cols = [r[2] for r in col_rows]
+                if existing_cols == columns:  # exact same column order
+                    return True
+
+            # 2) Create the unique index
+            with self._conn as conn:
+                conn.execute(sql.index_q(index_name, table_name, columns, unique=True))
+            return True
+        except Exception:
+            return False
+
     def select(
         self,
         table_name,

@@ -82,6 +82,22 @@ class TestDBInteraction(unittest.TestCase):
         )
         self.assertIsInstance(rlist, dict)
 
+        self.assertTrue(
+            DB.unique(
+                "uniq_a_table_triplet",
+                "a_table",
+                ["a_column", "a_number_column", "another_column"],
+            )
+        )
+        # idempotent
+        self.assertTrue(
+            DB.unique(
+                "uniq_a_table_triplet",
+                "a_table",
+                ["a_column", "a_number_column", "another_column"],
+            )
+        )
+
         # Exercise the parameterized IN (...) path via where={"a_number_column": [42, 999]}
         in_rows = DB.select(
             "a_table",
