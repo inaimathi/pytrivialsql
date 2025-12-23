@@ -154,10 +154,35 @@ class Sqlite3:
             return list(res)
 
     def insert(self, table_name, **args):
-        with self._conn as cur:
-            c = cur.cursor()
-            c.execute(*sql.insert_q(table_name, **args))
-            return c.lastrowid
+        with self._conn:  # commit/rollback happens on exit
+            c = self._conn.cursor()
+            try:
+                query, qargs = sql.insert_q(table_name, **args)
+                c.execute(query, qargs)
+
+                returning = args.get("RETURNING", None)
+                if returning:
+                    row = c.fetchone()
+                    # Important: finalize the statement before commit.
+                    # Either fetch remaining rows (if any) or just close the cursor.
+                    c.fetchall()
+
+                    if row is None:
+                        return None
+
+                    # Use actual returned column names (works for RETURNING "*")
+                    cols = [d[0] for d in (c.description or [])]
+                    if cols:
+                        return dict(zip(cols, row))
+
+                    # Fallback: if description is missing, best-effort
+                    if isinstance(returning, str) and returning != "*":
+                        return {returning: row[0]}
+                    return {"value": row[0]}
+
+                return c.lastrowid
+            finally:
+                c.close()
 
     def update(self, table_name, bindings, where):
         with self._conn as cur:
