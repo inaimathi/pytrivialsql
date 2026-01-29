@@ -128,18 +128,47 @@ class Sqlite3:
     ):
         with self._conn as cur:
             c = cur.cursor()
-            if columns is None or columns == "*":
-                columns = [
+
+            # Load base table columns when needed.
+            base_cols = None
+            base_colset = None
+            if join is not None or columns is None or columns == "*":
+                base_cols = [
                     el[1]
                     for el in c.execute(f"PRAGMA table_info({table_name})").fetchall()
                 ]
+                base_colset = set(base_cols)
+
+            if columns is None or columns == "*":
+                columns = base_cols
+
             if not columns:
                 raise Exception(f"No such table {table_name}")
             elif isinstance(columns, str):
                 columns = [columns]
+
+            key_columns = list(columns)
+            sql_columns = list(columns)
+
+            # If JOINing, qualify *only* base-table columns to avoid ambiguous names (e.g. "id").
+            if join is not None:
+                sql_columns = []
+                for col in columns:
+                    if isinstance(col, str) and _is_simple_col_token(col):
+                        col_name = self._extract_colname(col)  # uses _COLNAME_RE
+                        if base_colset and col_name in base_colset:
+                            # Preserve original quoting/brackets by qualifying the token as-is.
+                            sql_columns.append(f"{table_name}.{col.strip()}")
+                        else:
+                            # Likely from joined table; preserve legacy behavior.
+                            sql_columns.append(col)
+                    else:
+                        # Expressions / qualified names / etc.
+                        sql_columns.append(col)
+
             query, args = sql.select_q(
                 table_name,
-                columns,
+                sql_columns,
                 where=where,
                 distinct=distinct,
                 order_by=order_by,
@@ -148,7 +177,9 @@ class Sqlite3:
                 offset=offset,
             )
             c.execute(query, args)
-            res = (dict(zip(columns, vals)) for vals in c.fetchall())
+
+            # IMPORTANT: keep dict keys as originally requested (back-compat)
+            res = (dict(zip(key_columns, vals)) for vals in c.fetchall())
             if transform is not None:
                 return [transform(el) for el in res]
             return list(res)
@@ -194,3 +225,22 @@ class Sqlite3:
         with self._conn as cur:
             c = cur.cursor()
             c.execute(*sql.delete_q(table_name, where=where))
+
+
+def _is_simple_col_token(col: str) -> bool:
+    """
+    True if `col` is a plain column name token (optionally quoted/bracketed)
+    with no trailing SQL (no dots, no AS, no functions, etc).
+
+    Accepts: id, `id`, "id", [id]
+    Rejects: table.id, id AS x, count(*)
+    """
+    if not isinstance(col, str):
+        return False
+    s = col.strip()
+    m = _COLNAME_RE.match(s)
+    if not m:
+        return False
+    tail = s[m.end() :].strip()
+    # _COLNAME_RE does not consume the closing quote/bracket; allow it.
+    return tail in ("", "`", '"', "]")

@@ -161,10 +161,13 @@ class Postgres:
     ):
         try:
             with self._conn.cursor() as cur:
-                if columns is None:
-                    columns = "*"
+                # Match sqlite behavior: "*" means "base table columns".
+                if columns is None or columns == "*":
+                    columns = f"{table_name}.*" if join is not None else "*"
+
                 if type(columns) is str:
                     columns = [columns]
+
                 query, args = sql.select_q(
                     table_name,
                     columns,
