@@ -1,3 +1,4 @@
+# src/pytrivialsql/sqlite.py
 import re
 import sqlite3
 
@@ -220,6 +221,7 @@ class Sqlite3:
             c = cur.cursor()
             q, args = sql.update_q(table_name, where=where, **bindings)
             c.execute(q, args)
+            return c.rowcount
 
     def delete(self, table_name, where):
         with self._conn as cur:

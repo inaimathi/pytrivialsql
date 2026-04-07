@@ -1,3 +1,4 @@
+# src/pytrivialsql/sql.py
 def _in_clause_for_seq(col, seq, placeholder):
     vals = list(seq)
     non_null = [v for v in vals if v is not None]

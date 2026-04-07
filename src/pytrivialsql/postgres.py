@@ -1,3 +1,4 @@
+# src/pytrivialsql/postgres.py
 import json
 
 import psycopg
@@ -230,7 +231,9 @@ class Postgres:
                         binds[k] = json.dumps(v)
                 q, args = sql.update_q(table_name, where=where, **binds)
                 cur.execute(q, args)
+                rowcount = cur.rowcount  # capture before cursor closes
             self._commit()
+            return rowcount
         except Exception as e:
             self._reconnect()
             raise e

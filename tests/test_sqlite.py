@@ -1,3 +1,4 @@
+# tests/test_sqlite.py
 import sqlite3
 import tempfile
 import unittest
