@@ -71,13 +71,48 @@ class Sqlite3:
         except Exception:
             return False
 
-    def index(self, index_name, table_name, columns, unique=False):
+    def index(self, index_name, table_name, columns, unique=False, where=None):
         """
-        SQLite CREATE INDEX IF NOT EXISTS.
+        Create an index idempotently.
+
+        columns:
+            str | list[str]
+            May contain SQL expressions, e.g. "COALESCE(role, '')".
+
+        unique:
+            If True, create a UNIQUE index.
+
+        where:
+            Optional raw SQL predicate for a partial index, without
+            the leading WHERE.
+        """
+        if isinstance(columns, str):
+            columns = [columns]
+
+        q = sql.index_q(
+            index_name,
+            table_name,
+            columns,
+            unique=unique,
+        )
+
+        if where:
+            q += f" WHERE {where}"
+
+        try:
+            with self._conn as cur:
+                cur.execute(q)
+            return True
+        except Exception:
+            return False
+
+    def delete_index(self, index_name):
+        """
+        Drop an index idempotently.
         """
         try:
             with self._conn as cur:
-                cur.execute(sql.index_q(index_name, table_name, columns, unique=unique))
+                cur.execute(f"DROP INDEX IF EXISTS {index_name}")
             return True
         except Exception:
             return False

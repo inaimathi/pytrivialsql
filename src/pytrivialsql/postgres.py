@@ -69,18 +69,79 @@ class Postgres:
             self._commit()
             return True
 
-    def index(self, index_name, table_name, columns, unique=False, concurrently=False):
+    def index(
+        self,
+        index_name,
+        table_name,
+        columns,
+        unique=False,
+        concurrently=False,
+        where=None,
+    ):
         """
-        Create an index. If concurrently=True, uses CONCURRENTLY (requires autocommit).
+        Create an index idempotently.
+
+        columns:
+            str | list[str]
+            May contain SQL expressions, e.g. "COALESCE(role, '')".
+
+        unique:
+            If True, create a UNIQUE index.
+
+        concurrently:
+            If True, use CREATE INDEX CONCURRENTLY.
+            Requires autocommit=True.
+
+        where:
+            Optional raw SQL predicate for a partial index, without
+            the leading WHERE.
         """
         if isinstance(columns, str):
             columns = [columns]
-        cols = ", ".join(columns)
-        uniq = "UNIQUE " if unique else ""
+
+        if concurrently and not self._autocommit:
+            raise ValueError("CREATE INDEX CONCURRENTLY requires autocommit=True")
+
         if concurrently:
-            q = f"CREATE {uniq}INDEX CONCURRENTLY IF NOT EXISTS {index_name} ON {table_name} ({cols})"
+            uniq = "UNIQUE " if unique else ""
+            q = (
+                f"CREATE {uniq}INDEX CONCURRENTLY IF NOT EXISTS "
+                f"{index_name} ON {table_name} ({', '.join(columns)})"
+            )
         else:
-            q = sql.index_q(index_name, table_name, columns, unique=unique)
+            q = sql.index_q(
+                index_name,
+                table_name,
+                columns,
+                unique=unique,
+            )
+
+        if where:
+            q += f" WHERE {where}"
+
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(q)
+            self._commit()
+            return True
+        except Exception as e:
+            self._reconnect()
+            raise e
+
+    def delete_index(self, index_name, concurrently=False):
+        """
+        Drop an index idempotently.
+
+        concurrently:
+            If True, use DROP INDEX CONCURRENTLY.
+            Requires autocommit=True.
+        """
+        if concurrently and not self._autocommit:
+            raise ValueError("DROP INDEX CONCURRENTLY requires autocommit=True")
+
+        concurrent = "CONCURRENTLY " if concurrently else ""
+        q = f"DROP INDEX {concurrent}IF EXISTS {index_name}"
+
         try:
             with self._conn.cursor() as cur:
                 cur.execute(q)
