@@ -1,3 +1,4 @@
+# tests/test_sql.py
 import unittest
 
 from src.pytrivialsql import sql
