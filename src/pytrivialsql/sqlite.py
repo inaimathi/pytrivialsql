@@ -1,4 +1,4 @@
-# src/pytrivialsql/sqlite.py
+from contextlib import contextmanager
 import re
 import sqlite3
 
@@ -13,15 +13,77 @@ class Sqlite3:
         self._conn = sqlite3.connect(
             self.path, check_same_thread=not self.is_threadsafe()
         )
+        self._transaction_depth = 0
+        self._savepoint_counter = 0
+        self._in_transaction = False
+
+    def _commit(self):
+        if self._transaction_depth == 0:
+            self._conn.commit()
+
+    def _rollback(self):
+        if self._transaction_depth == 0:
+            self._conn.rollback()
+
+    def _next_savepoint(self):
+        self._savepoint_counter += 1
+        return f"pytrivialsql_sp_{self._savepoint_counter}"
+
+    @contextmanager
+    def transaction(self):
+        """
+        Execute a group of operations atomically.
+
+        The outermost transaction owns the connection-level BEGIN/COMMIT/ROLLBACK.
+        Nested transactions use SQLite savepoints, so an inner failure rolls back
+        only the inner block if the caller catches the exception.
+
+        Existing per-call commit behavior is preserved outside this context.
+        """
+        outermost = self._transaction_depth == 0
+        savepoint = None
+
+        if outermost:
+            self._conn.execute("BEGIN")
+        else:
+            savepoint = self._next_savepoint()
+            self._conn.execute(f"SAVEPOINT {savepoint}")
+
+        self._transaction_depth += 1
+        self._in_transaction = True
+        try:
+            yield self
+            if outermost:
+                self._conn.commit()
+            else:
+                self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except Exception:
+            if outermost:
+                self._conn.rollback()
+            else:
+                self._conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            raise
+        finally:
+            self._transaction_depth -= 1
+            self._in_transaction = self._transaction_depth > 0
 
     def exec(self, query, args=None):
-        with self._conn as cur:
-            cur.execute(query, args or ())
+        try:
+            self._conn.execute(query, args or ())
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
 
     def execs(self, query_args_pairs):
-        with self._conn as cur:
+        try:
             for q, qargs in query_args_pairs:
-                cur.execute(q, qargs)
+                self._conn.execute(q, qargs)
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
 
     def is_threadsafe(self):
         mem = sqlite3.connect("file::memory:?cache=shared")
@@ -34,18 +96,25 @@ class Sqlite3:
             return res[0][0].split("=")[1] == "1"
         except Exception:
             return False
+        finally:
+            mem.close()
 
     def drop(self, *table_names):
-        with self._conn as cur:
+        try:
             for tbl in table_names:
-                cur.execute(sql.drop_q(tbl))
+                self._conn.execute(sql.drop_q(tbl))
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
 
     def create(self, table_name, props):
         try:
-            with self._conn as cur:
-                cur.execute(sql.create_q(table_name, props))
-                return True
+            self._conn.execute(sql.create_q(table_name, props))
+            self._commit()
+            return True
         except Exception:
+            self._rollback()
             return False
 
     def _column_exists(self, table_name, column_name):
@@ -65,10 +134,11 @@ class Sqlite3:
         try:
             if self._column_exists(table_name, col_name):
                 return True  # idempotent: column already present
-            with self._conn as conn:
-                conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_def}")
+            self._conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_def}")
+            self._commit()
             return True
         except Exception:
+            self._rollback()
             return False
 
     def index(self, index_name, table_name, columns, unique=False, where=None):
@@ -100,10 +170,11 @@ class Sqlite3:
             q += f" WHERE {where}"
 
         try:
-            with self._conn as cur:
-                cur.execute(q)
+            self._conn.execute(q)
+            self._commit()
             return True
         except Exception:
+            self._rollback()
             return False
 
     def delete_index(self, index_name):
@@ -111,10 +182,11 @@ class Sqlite3:
         Drop an index idempotently.
         """
         try:
-            with self._conn as cur:
-                cur.execute(f"DROP INDEX IF EXISTS {index_name}")
+            self._conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+            self._commit()
             return True
         except Exception:
+            self._rollback()
             return False
 
     def unique(self, index_name, table_name, columns):
@@ -144,10 +216,11 @@ class Sqlite3:
                     return True
 
             # 2) Create the unique index
-            with self._conn as conn:
-                conn.execute(sql.index_q(index_name, table_name, columns, unique=True))
+            self._conn.execute(sql.index_q(index_name, table_name, columns, unique=True))
+            self._commit()
             return True
         except Exception:
+            self._rollback()
             return False
 
     def select(
@@ -162,9 +235,8 @@ class Sqlite3:
         offset=None,
         transform=None,
     ):
-        with self._conn as cur:
-            c = cur.cursor()
-
+        c = self._conn.cursor()
+        try:
             # Load base table columns when needed.
             base_cols = None
             base_colset = None
@@ -219,49 +291,72 @@ class Sqlite3:
             if transform is not None:
                 return [transform(el) for el in res]
             return list(res)
+        finally:
+            c.close()
 
     def insert(self, table_name, **args):
-        with self._conn:  # commit/rollback happens on exit
-            c = self._conn.cursor()
-            try:
-                query, qargs = sql.insert_q(table_name, **args)
-                c.execute(query, qargs)
+        c = self._conn.cursor()
+        try:
+            query, qargs = sql.insert_q(table_name, **args)
+            c.execute(query, qargs)
 
-                returning = args.get("RETURNING", None)
-                if returning:
-                    row = c.fetchone()
-                    # Important: finalize the statement before commit.
-                    # Either fetch remaining rows (if any) or just close the cursor.
-                    c.fetchall()
+            returning = args.get("RETURNING", None)
+            if returning:
+                row = c.fetchone()
+                # Important: finalize the statement before commit.
+                # Either fetch remaining rows (if any) or just close the cursor.
+                c.fetchall()
 
-                    if row is None:
-                        return None
+                if row is None:
+                    self._commit()
+                    return None
 
-                    # Use actual returned column names (works for RETURNING "*")
-                    cols = [d[0] for d in (c.description or [])]
-                    if cols:
-                        return dict(zip(cols, row))
-
+                # Use actual returned column names (works for RETURNING "*")
+                cols = [d[0] for d in (c.description or [])]
+                if cols:
+                    result = dict(zip(cols, row))
+                elif isinstance(returning, str) and returning != "*":
                     # Fallback: if description is missing, best-effort
-                    if isinstance(returning, str) and returning != "*":
-                        return {returning: row[0]}
-                    return {"value": row[0]}
+                    result = {returning: row[0]}
+                else:
+                    result = {"value": row[0]}
 
-                return c.lastrowid
-            finally:
-                c.close()
+                self._commit()
+                return result
+
+            result = c.lastrowid
+            self._commit()
+            return result
+        except Exception:
+            self._rollback()
+            raise
+        finally:
+            c.close()
 
     def update(self, table_name, bindings, where):
-        with self._conn as cur:
-            c = cur.cursor()
+        c = self._conn.cursor()
+        try:
             q, args = sql.update_q(table_name, where=where, **bindings)
             c.execute(q, args)
-            return c.rowcount
+            rowcount = c.rowcount
+            self._commit()
+            return rowcount
+        except Exception:
+            self._rollback()
+            raise
+        finally:
+            c.close()
 
     def delete(self, table_name, where):
-        with self._conn as cur:
-            c = cur.cursor()
+        c = self._conn.cursor()
+        try:
             c.execute(*sql.delete_q(table_name, where=where))
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+        finally:
+            c.close()
 
 
 def _is_simple_col_token(col: str) -> bool:

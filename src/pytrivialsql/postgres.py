@@ -1,4 +1,4 @@
-# src/pytrivialsql/postgres.py
+from contextlib import contextmanager
 import json
 
 import psycopg
@@ -12,10 +12,12 @@ class Postgres:
     def __init__(self, db_url, autocommit=True):
         self._autocommit = autocommit
         self._url = db_url
+        self._transaction_depth = 0
+        self._in_transaction = False
         self._connect()
 
     def _commit(self):
-        if not self._autocommit:
+        if not self._autocommit and self._transaction_depth == 0:
             self._conn.commit()
 
     def _connect(self):
@@ -25,17 +27,45 @@ class Postgres:
         self.close()
         self._connect()
 
+    def _recover_after_error(self):
+        # Reconnecting inside an explicit transaction would discard the
+        # transaction's connection state before the context manager can
+        # roll it back. Let transaction() own recovery in that case.
+        if self._transaction_depth == 0:
+            self._reconnect()
+
     def close(self):
         self._conn.close()
+
+    @contextmanager
+    def transaction(self):
+        """
+        Execute a group of operations atomically.
+
+        Psycopg implements nested transaction contexts with savepoints. The
+        depth counter prevents the adapter's legacy per-call commit/reconnect
+        behavior from interfering with either the outer transaction or an
+        inner savepoint.
+
+        Existing per-call commit behavior is preserved outside this context.
+        """
+        self._transaction_depth += 1
+        self._in_transaction = True
+        try:
+            with self._conn.transaction():
+                yield self
+        finally:
+            self._transaction_depth -= 1
+            self._in_transaction = self._transaction_depth > 0
 
     def exec(self, query, args=None):
         try:
             with self._conn.cursor() as cur:
                 cur.execute(query, args)
             self._commit()
-        except Exception as e:
-            self._reconnect()
-            raise e
+        except Exception:
+            self._recover_after_error()
+            raise
 
     def execs(self, query_args_pairs):
         try:
@@ -43,9 +73,9 @@ class Postgres:
                 for q, qargs in query_args_pairs:
                     cur.execute(q, qargs)
             self._commit()
-        except Exception as e:
-            self._reconnect()
-            raise e
+        except Exception:
+            self._recover_after_error()
+            raise
 
     def drop(self, *table_names):
         try:
@@ -53,9 +83,9 @@ class Postgres:
                 for tbl in table_names:
                     cur.execute(sql.drop_q(tbl))
             self._commit()
-        except Exception as e:
-            self._reconnect()
-            raise e
+        except Exception:
+            self._recover_after_error()
+            raise
 
     def create(self, table_name, props):
         with self._conn.cursor() as cur:
@@ -124,9 +154,9 @@ class Postgres:
                 cur.execute(q)
             self._commit()
             return True
-        except Exception as e:
-            self._reconnect()
-            raise e
+        except Exception:
+            self._recover_after_error()
+            raise
 
     def delete_index(self, index_name, concurrently=False):
         """
@@ -147,9 +177,9 @@ class Postgres:
                 cur.execute(q)
             self._commit()
             return True
-        except Exception as e:
-            self._reconnect()
-            raise e
+        except Exception:
+            self._recover_after_error()
+            raise
 
     def unique(self, index_name, table_name, columns, concurrently=False):
         """
@@ -205,9 +235,9 @@ class Postgres:
                 self._commit()
             return True
 
-        except Exception as e:
-            self._reconnect()
-            raise e
+        except Exception:
+            self._recover_after_error()
+            raise
 
     def select(
         self,
@@ -247,9 +277,9 @@ class Postgres:
                 if transform is not None:
                     return [transform(el) for el in res]
                 return list(res)
-        except Exception as e:
-            self._reconnect()
-            raise e
+        except Exception:
+            self._recover_after_error()
+            raise
         finally:
             self._commit()
 
@@ -278,9 +308,9 @@ class Postgres:
                         res = dict(zip(cols, res))
             self._commit()
             return res
-        except Exception as e:
-            self._reconnect()
-            raise e
+        except Exception:
+            self._recover_after_error()
+            raise
 
     def update(self, table_name, bindings, where):
         global _JSON_TYPES
@@ -295,15 +325,15 @@ class Postgres:
                 rowcount = cur.rowcount  # capture before cursor closes
             self._commit()
             return rowcount
-        except Exception as e:
-            self._reconnect()
-            raise e
+        except Exception:
+            self._recover_after_error()
+            raise
 
     def delete(self, table_name, where):
         try:
             with self._conn.cursor() as cur:
                 cur.execute(*sql.delete_q(table_name, where=where, placeholder="%s"))
             self._commit()
-        except Exception as e:
-            self._reconnect()
-            raise e
+        except Exception:
+            self._recover_after_error()
+            raise

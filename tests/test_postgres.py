@@ -1,4 +1,3 @@
-# tests/test_postgres.py
 import os
 import unittest
 
@@ -9,6 +8,7 @@ from src.pytrivialsql import postgres
 class TestDBInteraction(unittest.TestCase):
     def test_basic_interactions(self):
         DB = postgres.Postgres(os.environ["POSTGRES_URL"])
+        DB.drop("a_table")
         DB.create(
             "a_table",
             [
@@ -39,6 +39,8 @@ class TestDBInteraction(unittest.TestCase):
         self.assertIn("idx_a_table_a_number_column", idx_names)
 
         self.assertEqual([], DB.select("a_table", "*"))
+
+        # Original public syntax remains unchanged.
         res = DB.insert(
             "a_table",
             a_column="Blah blah",
@@ -112,3 +114,162 @@ class TestDBInteraction(unittest.TestCase):
         with self.assertRaises(psycopg.errors.UndefinedTable):
             DB.select("a_table", "*")
         DB.close()
+
+    def test_legacy_writes_commit_without_transaction(self):
+        db_url = os.environ["POSTGRES_URL"]
+        DB = postgres.Postgres(db_url, autocommit=False)
+        DB.drop("legacy_table")
+        DB.create(
+            "legacy_table",
+            [
+                "id BIGSERIAL PRIMARY KEY NOT NULL",
+                "value TEXT",
+            ],
+        )
+
+        try:
+            row_id = DB.insert("legacy_table", value="visible immediately", RETURNING="id")
+
+            # A separate connection should see the write immediately, preserving
+            # the pre-transaction API's per-call commit behavior even when this
+            # adapter connection itself has autocommit disabled.
+            with psycopg.connect(db_url) as observer:
+                with observer.cursor() as cur:
+                    cur.execute(
+                        "SELECT value FROM legacy_table WHERE id = %s",
+                        (row_id,),
+                    )
+                    self.assertEqual(("visible immediately",), cur.fetchone())
+        finally:
+            DB.drop("legacy_table")
+            DB.close()
+
+    def test_transaction_commit_and_rollback(self):
+        db_url = os.environ["POSTGRES_URL"]
+        DB = postgres.Postgres(db_url)
+        DB.drop("transaction_table")
+        DB.create(
+            "transaction_table",
+            [
+                "id BIGSERIAL PRIMARY KEY NOT NULL",
+                "value TEXT",
+            ],
+        )
+
+        try:
+            baseline_id = DB.insert(
+                "transaction_table", value="baseline", RETURNING="id"
+            )
+
+            # A successful non-nested transaction commits the entire group.
+            with DB.transaction() as tx:
+                self.assertIs(tx, DB)
+                committed_id = tx.insert(
+                    "transaction_table", value="committed", RETURNING="id"
+                )
+                tx.update(
+                    "transaction_table",
+                    {"value": "baseline updated"},
+                    where={"id": baseline_id},
+                )
+
+            self.assertEqual(
+                [{"value": "committed"}],
+                DB.select("transaction_table", "value", where={"id": committed_id}),
+            )
+            self.assertEqual(
+                [{"value": "baseline updated"}],
+                DB.select("transaction_table", "value", where={"id": baseline_id}),
+            )
+
+            # An uncaught exception rolls the non-nested transaction back.
+            with self.assertRaises(RuntimeError):
+                with DB.transaction():
+                    DB.insert("transaction_table", value="rolled back")
+                    DB.update(
+                        "transaction_table",
+                        {"value": "should not survive"},
+                        where={"id": baseline_id},
+                    )
+                    raise RuntimeError("force rollback")
+
+            self.assertEqual(
+                [],
+                DB.select("transaction_table", "id", where={"value": "rolled back"}),
+            )
+            self.assertEqual(
+                [{"value": "baseline updated"}],
+                DB.select("transaction_table", "value", where={"id": baseline_id}),
+            )
+        finally:
+            DB.drop("transaction_table")
+            DB.close()
+
+    def test_nested_transactions_use_savepoints(self):
+        db_url = os.environ["POSTGRES_URL"]
+        DB = postgres.Postgres(db_url, autocommit=False)
+        DB.drop("nested_table")
+        DB.create(
+            "nested_table",
+            [
+                "id BIGSERIAL PRIMARY KEY NOT NULL",
+                "value TEXT UNIQUE",
+            ],
+        )
+
+        try:
+            # Psycopg transaction contexts nest as savepoints. A database failure two
+            # levels down can therefore be caught without aborting either
+            # enclosing transaction scope.
+            with DB.transaction():
+                DB.insert("nested_table", value="outer before")
+
+                with DB.transaction():
+                    DB.insert("nested_table", value="middle before")
+
+                    try:
+                        with DB.transaction():
+                            DB.insert("nested_table", value="middle before")
+                    except psycopg.errors.UniqueViolation:
+                        pass
+
+                    # The failed inner savepoint must clear PostgreSQL's failed
+                    # transaction state so the enclosing transaction can continue.
+                    self.assertEqual(
+                        [{"value": "middle before"}],
+                        DB.select(
+                            "nested_table",
+                            ["value"],
+                            where={"value": "middle before"},
+                        ),
+                    )
+                    DB.insert("nested_table", value="middle after")
+
+                DB.insert("nested_table", value="outer after")
+
+            committed_values = {
+                row["value"] for row in DB.select("nested_table", ["value"])
+            }
+            self.assertEqual(
+                {"outer before", "middle before", "middle after", "outer after"},
+                committed_values,
+            )
+
+            # A successful inner savepoint remains part of its outer transaction;
+            # it is not independently committed.
+            with self.assertRaises(RuntimeError):
+                with DB.transaction():
+                    DB.insert("nested_table", value="outer rolled back")
+                    with DB.transaction():
+                        DB.insert("nested_table", value="inner would commit")
+                    raise RuntimeError("rollback outer transaction")
+
+            rolled_back_values = DB.select(
+                "nested_table",
+                ["value"],
+                where={"value": ["outer rolled back", "inner would commit"]},
+            )
+            self.assertEqual([], rolled_back_values)
+        finally:
+            DB.drop("nested_table")
+            DB.close()
