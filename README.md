@@ -2,48 +2,68 @@
 
 _A small set of quality-of-life bindings for SQL interaction that became useful enough to stop copy/pasting between projects._
 
-PyTrivialSQL is intentionally much smaller than an ORM. It provides a thin Python API over common SQLite and PostgreSQL operations while leaving tables, columns, indexes, joins, predicates, and SQL types visible to the caller.
+PyTrivialSQL is intentionally much smaller than an ORM. It provides a thin Python API over common SQLite, PostgreSQL, MySQL/MariaDB, and DuckDB operations while leaving tables, columns, indexes, joins, predicates, and SQL types visible to the caller.
 
 It currently supports:
 
 - SQLite through Python's built-in `sqlite3` module.
 - PostgreSQL through Psycopg 3.
+- MySQL and MariaDB through PyMySQL.
+- DuckDB through the DuckDB Python client.
 - Common CRUD and schema operations.
 - Parameterized `WHERE` construction, including `IN`, `NULL`, `NOT`, `AND`, and `OR` forms.
 - Index and unique-index helpers.
-- Explicit transactions, including nested transactions/savepoints.
+- Explicit transactions, with nested savepoints on SQLite, PostgreSQL, and MySQL/MariaDB.
 - Direct SQL escape hatches through `exec()` and `execs()`.
 
 The goal is not to hide SQL. The goal is to make the boring 80% of small database interactions concise while keeping the generated SQL understandable.
 
 ## Installation
 
+PyTrivialSQL currently targets Python 3.8 or newer. Install only the backend dependencies you need:
+
 ```sh
-pip install pytrivialsql
+pip install 'pytrivialsql[sqlite]'
+pip install 'pytrivialsql[postgres]'
+pip install 'pytrivialsql[mysql]'
+pip install 'pytrivialsql[mariadb]'
+pip install 'pytrivialsql[duckdb]'
 ```
 
-PyTrivialSQL currently targets Python 3.8 or newer.
+Or install all external backend drivers:
+
+```sh
+pip install 'pytrivialsql[all]'
+```
+
+A bare `pip install pytrivialsql` installs the dependency-free core package. Python packaging extras are additive, so current packaging standards cannot simultaneously make the bare install include every backend while making a named extra suppress the other backend dependencies.
 
 Then import the backend you want:
 
 ```python
-from pytrivialsql import sqlite, postgres
+from pytrivialsql import duckdb, mysql, postgres, sqlite
 ```
 
 ## Common database API
 
-The SQLite and PostgreSQL adapters intentionally expose a similar top-level API. For ordinary application code, this means the storage backend can often be selected at construction time while the CRUD code remains substantially the same.
+The SQLite, PostgreSQL, MySQL/MariaDB, and DuckDB adapters intentionally expose a similar top-level API. For ordinary application code, this means the storage backend can often be selected at construction time while the CRUD code remains substantially the same.
 
 ```python
 import os
 
-from pytrivialsql import sqlite, postgres
+from pytrivialsql import duckdb, mysql, postgres, sqlite
 
 # SQLite
 DB = sqlite.Sqlite3("data/app.db")
 
-# Or PostgreSQL
+# PostgreSQL
 DB = postgres.Postgres(os.environ["DATABASE_URL"])
+
+# MySQL / MariaDB
+DB = mysql.MySQL(os.environ["MYSQL_URL"])
+
+# DuckDB
+DB = duckdb.DuckDB("data/app.duckdb")
 ```
 
 The common operations are:
@@ -70,7 +90,7 @@ with DB.transaction():
     ...
 ```
 
-The core CRUD, transaction, `RETURNING`, `distinct`, and connection-closing behavior is intentionally aligned across SQLite and PostgreSQL. Backend-specific setup options and SQL-dialect features are documented in the SQLite and PostgreSQL sections below.
+The core CRUD, `RETURNING`, `distinct`, and connection-closing behavior is aligned where the database supports the required semantics. SQLite, PostgreSQL, and MySQL/MariaDB support nested `transaction()` scopes through savepoints. DuckDB supports outer transactions but currently has no savepoints, so nested `transaction()` calls raise `NotImplementedError`.
 
 ### Where this API fits
 
@@ -572,7 +592,7 @@ DB.exec(
 )
 ```
 
-For PostgreSQL, use the driver's `%s` placeholder syntax instead:
+For PostgreSQL and MySQL/MariaDB, use the driver's `%s` placeholder syntax instead:
 
 ```python
 DB.exec(
@@ -632,7 +652,7 @@ with DB.transaction() as tx:
 
 #### Nested transactions
 
-Transactions may be nested. Inner transactions use savepoint semantics:
+SQLite, PostgreSQL, and MySQL/MariaDB transactions may be nested. Inner transactions use savepoint semantics:
 
 ```python
 with DB.transaction():
@@ -667,7 +687,7 @@ except RuntimeError:
 
 Neither row survives.
 
-This makes helper functions composable: a function can protect its own multi-statement operation with `transaction()` without requiring every caller to know whether it is already running inside another transaction.
+This makes helper functions composable on the savepoint-capable backends: a function can protect its own multi-statement operation with `transaction()` without requiring every caller to know whether it is already running inside another transaction. DuckDB currently has no savepoints; its adapter raises `NotImplementedError` when `transaction()` is nested.
 
 ## SQLite
 
@@ -1006,6 +1026,41 @@ DB.close()
 
 Call it when a long-lived adapter is no longer needed.
 
+## MySQL / MariaDB
+
+Use the MySQL adapter for either MySQL or MariaDB:
+
+```python
+from pytrivialsql import mysql
+
+DB = mysql.MySQL("mysql://user:password@localhost/app")
+# mysql.MariaDB is an alias of mysql.MySQL
+
+# The database-specific import spelling is also available:
+from pytrivialsql import mariadb
+DB = mariadb.MariaDB("mariadb://user:password@localhost/app")
+```
+
+The adapter uses PyMySQL and accepts both `mysql://` and `mariadb://` URLs. Ordinary CRUD, `distinct`, indexes, `close()`, and explicit transactions follow the common API. Nested transactions use database savepoints.
+
+MySQL does not provide PostgreSQL-style `INSERT ... RETURNING`, so PyTrivialSQL emulates the common return-value contract. The inserted table must have a primary key whose value is either supplied by the insert or generated by a single `AUTO_INCREMENT` primary-key column. `RETURNING="id"` returns a scalar; multiple columns or `RETURNING="*"` return a dictionary.
+
+Partial indexes (`index(..., where=...)`) are not supported by this adapter. MySQL-family DDL can also perform implicit commits, so transaction guarantees around schema-changing operations follow the database's own DDL semantics.
+
+## DuckDB
+
+Use the DuckDB adapter for embedded analytical workloads:
+
+```python
+from pytrivialsql import duckdb
+
+DB = duckdb.DuckDB("analytics.duckdb")
+```
+
+DuckDB supports the common CRUD API and native `INSERT ... RETURNING`, so insert return shapes match SQLite and PostgreSQL. Ordinary `transaction()` blocks commit or roll back atomically. DuckDB currently does not implement savepoints, so nested `transaction()` calls raise `NotImplementedError` rather than silently providing weaker semantics.
+
+Partial indexes are not supported by the adapter.
+
 ## The underlying SQL builder
 
 `src/pytrivialsql/sql.py` contains the database-independent SQL string builders used by both adapters. It does not own connections, cursors, commits, rollbacks, or transaction state.
@@ -1015,6 +1070,8 @@ This separation is intentional:
 - `sql.py` translates Python representations into SQL strings and parameter tuples.
 - `sqlite.py` owns SQLite connection behavior and SQLite-specific conveniences.
 - `postgres.py` owns Psycopg/PostgreSQL connection behavior and PostgreSQL-specific conveniences.
+- `mysql.py` owns PyMySQL/MySQL/MariaDB behavior, including `RETURNING` emulation and savepoints.
+- `duckdb.py` owns DuckDB connection behavior and documents the engine's lack of savepoints.
 
 Most builder functions return either a SQL string or a `(sql, args)` pair suitable for a database driver. They can also be imported directly when useful:
 
@@ -1034,7 +1091,7 @@ sql.insert_q("users", email="alice@example.com")
 # )
 ```
 
-Pass `placeholder="%s"` for Psycopg/PostgreSQL:
+Pass `placeholder="%s"` for Psycopg/PostgreSQL or PyMySQL/MySQL:
 
 ```python
 sql.insert_q(
@@ -1048,7 +1105,7 @@ sql.insert_q(
 # )
 ```
 
-The PostgreSQL adapter supplies this automatically.
+The PostgreSQL and MySQL/MariaDB adapters supply this automatically.
 
 ### `where_to_string()`
 
@@ -1313,7 +1370,9 @@ As a rule of thumb:
 - Changes to `sql.py` should have direct query-generation tests in `tests/test_sql.py`.
 - Changes to SQLite behavior should be exercised in `tests/test_sqlite.py`.
 - Changes to PostgreSQL behavior should be exercised in `tests/test_postgres.py`.
-- A feature advertised as common across both adapters should have corresponding behavioral coverage for both adapters.
+- Changes to MySQL/MariaDB behavior should be exercised in `tests/test_mysql.py` with `MYSQL_URL` or `MARIADB_URL`.
+- Changes to DuckDB behavior should be exercised in `tests/test_duckdb.py`.
+- A feature advertised as common across adapters should have corresponding behavioral coverage for each backend that claims support.
 - Backwards-compatible behavior matters: when changing transaction, commit, return-value, or query semantics, preserve and test the pre-existing non-feature usage as well as the new syntax.
 - Bug fixes should normally include a regression test that fails before the fix and passes after it.
 
@@ -1359,7 +1418,7 @@ Avoid:
 - dependencies for functionality already provided adequately by the standard library or the existing database driver;
 - unrelated refactors bundled into a feature or bug-fix PR.
 
-If a new backend is added, aim to implement the common public API where the backend supports it, document meaningful deviations, and add an integration test suite comparable to the SQLite and PostgreSQL suites.
+If a new backend is added, aim to implement the common public API where the backend supports it, document meaningful deviations, and add an integration test suite comparable to the existing backend suites.
 
 ## License
 
