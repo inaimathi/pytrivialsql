@@ -40,7 +40,6 @@ class TestDBInteraction(unittest.TestCase):
 
         self.assertEqual([], DB.select("a_table", "*"))
 
-        # Original public syntax remains unchanged.
         res = DB.insert(
             "a_table",
             a_column="Blah blah",
@@ -115,6 +114,70 @@ class TestDBInteraction(unittest.TestCase):
             DB.select("a_table", "*")
         DB.close()
 
+    def test_insert_returning_shapes_and_distinct(self):
+        DB = postgres.Postgres(os.environ["POSTGRES_URL"])
+        DB.drop("compat_table")
+        DB.create(
+            "compat_table",
+            [
+                "id BIGSERIAL PRIMARY KEY NOT NULL",
+                "value TEXT",
+                "category TEXT",
+            ],
+        )
+
+        try:
+            # No RETURNING means no return value.
+            self.assertIsNone(DB.insert("compat_table", value="plain", category="same"))
+
+            # Upper- and lower-case spellings are equivalent. A single
+            # returned column is a scalar on both adapters.
+            upper_id = DB.insert(
+                "compat_table", value="upper", category="same", RETURNING="id"
+            )
+            lower_id = DB.insert(
+                "compat_table", value="lower", category="same", returning="id"
+            )
+            list_id = DB.insert(
+                "compat_table", value="list", category="other", returning=["id"]
+            )
+            self.assertIsInstance(upper_id, int)
+            self.assertIsInstance(lower_id, int)
+            self.assertIsInstance(list_id, int)
+
+            # Multiple returned columns are represented as a dict.
+            multi = DB.insert(
+                "compat_table",
+                value="multi",
+                category="other",
+                RETURNING=["id", "value", "category"],
+            )
+            self.assertEqual("multi", multi["value"])
+            self.assertEqual("other", multi["category"])
+            self.assertIsInstance(multi["id"], int)
+
+            # RETURNING * likewise returns a dict for this multi-column table.
+            row = DB.insert(
+                "compat_table", value="star", category="same", returning="*"
+            )
+            self.assertEqual("star", row["value"])
+            self.assertEqual("same", row["category"])
+            self.assertIsInstance(row["id"], int)
+
+            # distinct= has ordinary SQL DISTINCT semantics, matching SQLite.
+            self.assertEqual(
+                [{"category": "other"}, {"category": "same"}],
+                DB.select(
+                    "compat_table",
+                    ["category"],
+                    distinct="category",
+                    order_by="category",
+                ),
+            )
+        finally:
+            DB.drop("compat_table")
+            DB.close()
+
     def test_legacy_writes_commit_without_transaction(self):
         db_url = os.environ["POSTGRES_URL"]
         DB = postgres.Postgres(db_url, autocommit=False)
@@ -128,16 +191,16 @@ class TestDBInteraction(unittest.TestCase):
         )
 
         try:
-            row_id = DB.insert("legacy_table", value="visible immediately", RETURNING="id")
+            self.assertIsNone(DB.insert("legacy_table", value="visible immediately"))
 
             # A separate connection should see the write immediately, preserving
-            # the pre-transaction API's per-call commit behavior even when this
-            # adapter connection itself has autocommit disabled.
+            # the per-call commit behavior even when this adapter connection itself
+            # has autocommit disabled.
             with psycopg.connect(db_url) as observer:
                 with observer.cursor() as cur:
                     cur.execute(
-                        "SELECT value FROM legacy_table WHERE id = %s",
-                        (row_id,),
+                        "SELECT value FROM legacy_table WHERE value = %s",
+                        ("visible immediately",),
                     )
                     self.assertEqual(("visible immediately",), cur.fetchone())
         finally:

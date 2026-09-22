@@ -264,7 +264,7 @@ class Postgres:
                     table_name,
                     columns,
                     where=where,
-                    distinct_on=distinct,
+                    distinct=distinct,
                     order_by=order_by,
                     limit=limit,
                     join=join,

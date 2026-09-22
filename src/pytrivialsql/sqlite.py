@@ -99,6 +99,9 @@ class Sqlite3:
         finally:
             mem.close()
 
+    def close(self):
+        self._conn.close()
+
     def drop(self, *table_names):
         try:
             for tbl in table_names:
@@ -297,34 +300,32 @@ class Sqlite3:
     def insert(self, table_name, **args):
         c = self._conn.cursor()
         try:
+            returning = args.get("returning", args.get("RETURNING", None))
+
+            # sql.insert_q expects an iterable of RETURNING expressions. Normalize
+            # a single string here, matching the PostgreSQL adapter.
+            for key in ("returning", "RETURNING"):
+                if key in args and isinstance(args[key], str):
+                    args[key] = [args[key]]
+
             query, qargs = sql.insert_q(table_name, **args)
             c.execute(query, qargs)
 
-            returning = args.get("RETURNING", None)
-            if returning:
+            if returning is None:
+                result = None
+            else:
                 row = c.fetchone()
-                # Important: finalize the statement before commit.
-                # Either fetch remaining rows (if any) or just close the cursor.
+                # Finalize the RETURNING statement before committing.
                 c.fetchall()
 
                 if row is None:
-                    self._commit()
-                    return None
-
-                # Use actual returned column names (works for RETURNING "*")
-                cols = [d[0] for d in (c.description or [])]
-                if cols:
-                    result = dict(zip(cols, row))
-                elif isinstance(returning, str) and returning != "*":
-                    # Fallback: if description is missing, best-effort
-                    result = {returning: row[0]}
+                    result = None
+                elif len(row) == 1:
+                    result = row[0]
                 else:
-                    result = {"value": row[0]}
+                    cols = [d[0] for d in (c.description or [])]
+                    result = dict(zip(cols, row))
 
-                self._commit()
-                return result
-
-            result = c.lastrowid
             self._commit()
             return result
         except Exception:
