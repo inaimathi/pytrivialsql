@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import pymysql
 
 from . import sql
+from ._concurrency import ConnectionGuard, connection_guarded
 
 _JSON_TYPES = {list, dict}
 
@@ -14,9 +15,8 @@ class MySQL:
 
     def __init__(self, db_url=None, autocommit=True, **connect_kwargs):
         self._autocommit = autocommit
-        self._transaction_depth = 0
+        self._guard = ConnectionGuard("MySQL/MariaDB")
         self._savepoint_counter = 0
-        self._in_transaction = False
         self._connect_kwargs = self._connection_kwargs(db_url, connect_kwargs)
         self._connect()
 
@@ -60,7 +60,7 @@ class MySQL:
         self._connect()
 
     def _recover_after_error(self):
-        if self._transaction_depth == 0:
+        if not self._guard.in_transaction:
             try:
                 if not self._autocommit:
                     self._conn.rollback()
@@ -68,13 +68,14 @@ class MySQL:
                 self._reconnect()
 
     def _commit(self):
-        if not self._autocommit and self._transaction_depth == 0:
+        if not self._autocommit and not self._guard.in_transaction:
             self._conn.commit()
 
     def _next_savepoint(self):
         self._savepoint_counter += 1
         return f"pytrivialsql_sp_{self._savepoint_counter}"
 
+    @connection_guarded
     def close(self):
         self._conn.close()
 
@@ -84,40 +85,41 @@ class MySQL:
         Execute a group of operations atomically.
 
         The outermost scope owns BEGIN/COMMIT/ROLLBACK. Nested scopes use
-        SAVEPOINT/ROLLBACK TO SAVEPOINT/RELEASE SAVEPOINT, which is supported
-        by transactional MySQL/MariaDB storage engines such as InnoDB.
+        SAVEPOINT/ROLLBACK TO SAVEPOINT/RELEASE SAVEPOINT. The connection
+        guard serializes threads and prevents a different asyncio task on the
+        same thread from accidentally joining the active transaction.
         """
-        outermost = self._transaction_depth == 0
-        savepoint = None
+        with self._guard.lock:
+            owner, outermost = self._guard.transaction_entry()
+            savepoint = None
 
-        if outermost:
-            self._conn.begin()
-        else:
-            savepoint = self._next_savepoint()
-            with self._conn.cursor() as cur:
-                cur.execute(f"SAVEPOINT {savepoint}")
-
-        self._transaction_depth += 1
-        self._in_transaction = True
-        try:
-            yield self
             if outermost:
-                self._conn.commit()
+                self._conn.begin()
             else:
+                savepoint = self._next_savepoint()
                 with self._conn.cursor() as cur:
-                    cur.execute(f"RELEASE SAVEPOINT {savepoint}")
-        except Exception:
-            if outermost:
-                self._conn.rollback()
-            else:
-                with self._conn.cursor() as cur:
-                    cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
-                    cur.execute(f"RELEASE SAVEPOINT {savepoint}")
-            raise
-        finally:
-            self._transaction_depth -= 1
-            self._in_transaction = self._transaction_depth > 0
+                    cur.execute(f"SAVEPOINT {savepoint}")
 
+            self._guard.enter_transaction(owner)
+            try:
+                yield self
+                if outermost:
+                    self._conn.commit()
+                else:
+                    with self._conn.cursor() as cur:
+                        cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+            except Exception:
+                if outermost:
+                    self._conn.rollback()
+                else:
+                    with self._conn.cursor() as cur:
+                        cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                        cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+                raise
+            finally:
+                self._guard.leave_transaction(owner)
+
+    @connection_guarded
     def exec(self, query, args=None):
         try:
             with self._conn.cursor() as cur:
@@ -130,6 +132,7 @@ class MySQL:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def execs(self, query_args_pairs):
         try:
             with self._conn.cursor() as cur:
@@ -140,6 +143,7 @@ class MySQL:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def drop(self, *table_names):
         try:
             with self._conn.cursor() as cur:
@@ -150,6 +154,7 @@ class MySQL:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def create(self, table_name, props):
         try:
             with self._conn.cursor() as cur:
@@ -180,6 +185,7 @@ class MySQL:
         token = col_def.strip().split()[0]
         return token.strip('`"[]')
 
+    @connection_guarded
     def add_column(self, table_name, col_def):
         col_name = self._extract_colname(col_def)
         try:
@@ -211,6 +217,7 @@ class MySQL:
             row = cur.fetchone()
             return None if row is None else row[0]
 
+    @connection_guarded
     def index(self, index_name, table_name, columns, unique=False, where=None):
         if where is not None:
             raise ValueError("MySQL/MariaDB do not support partial indexes via WHERE")
@@ -233,6 +240,7 @@ class MySQL:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def delete_index(self, index_name):
         try:
             table_name = self._index_exists(index_name)
@@ -246,6 +254,7 @@ class MySQL:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def unique(self, index_name, table_name, columns):
         if isinstance(columns, str):
             columns = [columns]
@@ -281,6 +290,7 @@ class MySQL:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def select(
         self,
         table_name,
@@ -355,6 +365,7 @@ class MySQL:
             "to be supplied, or a single AUTO_INCREMENT primary key"
         )
 
+    @connection_guarded
     def insert(self, table_name, **args):
         global _JSON_TYPES
         returning = args.pop("returning", args.pop("RETURNING", None))
@@ -371,7 +382,7 @@ class MySQL:
         # autocommits, keep the INSERT and follow-up SELECT in one short transaction
         # so another connection cannot modify the row between those statements.
         implicit_returning_transaction = (
-            returning is not None and self._transaction_depth == 0 and self._autocommit
+            returning is not None and not self._guard.in_transaction and self._autocommit
         )
         if implicit_returning_transaction:
             self._conn.begin()
@@ -423,6 +434,7 @@ class MySQL:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def update(self, table_name, bindings, where):
         global _JSON_TYPES
         binds = {}
@@ -441,6 +453,7 @@ class MySQL:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def delete(self, table_name, where):
         try:
             q, args = sql.delete_q(table_name, where=where, placeholder="%s")

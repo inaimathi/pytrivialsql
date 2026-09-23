@@ -4,6 +4,7 @@ import json
 import psycopg
 
 from . import sql
+from ._concurrency import ConnectionGuard, connection_guarded
 
 _JSON_TYPES = {list, dict}
 
@@ -12,12 +13,11 @@ class Postgres:
     def __init__(self, db_url, autocommit=True):
         self._autocommit = autocommit
         self._url = db_url
-        self._transaction_depth = 0
-        self._in_transaction = False
+        self._guard = ConnectionGuard("PostgreSQL")
         self._connect()
 
     def _commit(self):
-        if not self._autocommit and self._transaction_depth == 0:
+        if not self._autocommit and not self._guard.in_transaction:
             self._conn.commit()
 
     def _connect(self):
@@ -31,9 +31,10 @@ class Postgres:
         # Reconnecting inside an explicit transaction would discard the
         # transaction's connection state before the context manager can
         # roll it back. Let transaction() own recovery in that case.
-        if self._transaction_depth == 0:
+        if not self._guard.in_transaction:
             self._reconnect()
 
+    @connection_guarded
     def close(self):
         self._conn.close()
 
@@ -43,21 +44,21 @@ class Postgres:
         Execute a group of operations atomically.
 
         Psycopg implements nested transaction contexts with savepoints. The
-        depth counter prevents the adapter's legacy per-call commit/reconnect
-        behavior from interfering with either the outer transaction or an
-        inner savepoint.
+        connection guard serializes threads and ensures a different asyncio
+        task on the same thread cannot accidentally join an active transaction.
 
         Existing per-call commit behavior is preserved outside this context.
         """
-        self._transaction_depth += 1
-        self._in_transaction = True
-        try:
+        with self._guard.lock:
+            owner, _ = self._guard.transaction_entry()
             with self._conn.transaction():
-                yield self
-        finally:
-            self._transaction_depth -= 1
-            self._in_transaction = self._transaction_depth > 0
+                self._guard.enter_transaction(owner)
+                try:
+                    yield self
+                finally:
+                    self._guard.leave_transaction(owner)
 
+    @connection_guarded
     def exec(self, query, args=None):
         try:
             with self._conn.cursor() as cur:
@@ -67,6 +68,7 @@ class Postgres:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def execs(self, query_args_pairs):
         try:
             with self._conn.cursor() as cur:
@@ -77,6 +79,7 @@ class Postgres:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def drop(self, *table_names):
         try:
             with self._conn.cursor() as cur:
@@ -87,18 +90,21 @@ class Postgres:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def create(self, table_name, props):
         with self._conn.cursor() as cur:
             cur.execute(sql.create_q(table_name, props))
             self._commit()
             return True
 
+    @connection_guarded
     def add_column(self, table_name, col):
         with self._conn.cursor() as cur:
             cur.execute(sql.add_column_q(table_name, col))
             self._commit()
             return True
 
+    @connection_guarded
     def index(
         self,
         index_name,
@@ -158,6 +164,7 @@ class Postgres:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def delete_index(self, index_name, concurrently=False):
         """
         Drop an index idempotently.
@@ -181,6 +188,7 @@ class Postgres:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def unique(self, index_name, table_name, columns, concurrently=False):
         """
         Ensure a unique index exists on (columns) for table_name.
@@ -239,6 +247,7 @@ class Postgres:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def select(
         self,
         table_name,
@@ -283,6 +292,7 @@ class Postgres:
         finally:
             self._commit()
 
+    @connection_guarded
     def insert(self, table_name, **args):
         global _JSON_TYPES
         returning = args.get("returning", args.get("RETURNING", None))
@@ -312,6 +322,7 @@ class Postgres:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def update(self, table_name, bindings, where):
         global _JSON_TYPES
         binds = {"placeholder": "%s", **bindings}
@@ -329,6 +340,7 @@ class Postgres:
             self._recover_after_error()
             raise
 
+    @connection_guarded
     def delete(self, table_name, where):
         try:
             with self._conn.cursor() as cur:

@@ -1,4 +1,7 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import os
+import threading
 import unittest
 
 import psycopg
@@ -335,4 +338,131 @@ class TestDBInteraction(unittest.TestCase):
             self.assertEqual([], rolled_back_values)
         finally:
             DB.drop("nested_table")
+            DB.close()
+
+
+    def test_shared_connection_transactions_serialize_across_threads(self):
+        db_url = os.environ["POSTGRES_URL"]
+        DB = postgres.Postgres(db_url)
+        DB.drop("thread_counter")
+        DB.create(
+            "thread_counter",
+            [
+                "id BIGINT PRIMARY KEY",
+                "value INTEGER NOT NULL",
+            ],
+        )
+        DB.insert("thread_counter", id=1, value=0)
+
+        first_inside = threading.Event()
+        release_first = threading.Event()
+        second_attempting = threading.Event()
+        second_inside = threading.Event()
+
+        def first():
+            with DB.transaction():
+                row = DB.select("thread_counter", "*", where={"id": 1})[0]
+                first_inside.set()
+                self.assertTrue(release_first.wait(2))
+                DB.update(
+                    "thread_counter",
+                    {"value": row["value"] + 1},
+                    where={"id": 1},
+                )
+
+        def second():
+            self.assertTrue(first_inside.wait(2))
+            second_attempting.set()
+            with DB.transaction():
+                second_inside.set()
+                row = DB.select("thread_counter", "*", where={"id": 1})[0]
+                DB.update(
+                    "thread_counter",
+                    {"value": row["value"] + 1},
+                    where={"id": 1},
+                )
+
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first_future = pool.submit(first)
+                second_future = pool.submit(second)
+
+                self.assertTrue(second_attempting.wait(2))
+                self.assertFalse(second_inside.wait(0.1))
+
+                release_first.set()
+                first_future.result(timeout=2)
+                second_future.result(timeout=2)
+
+            self.assertEqual(
+                2,
+                DB.select("thread_counter", "*", where={"id": 1})[0]["value"],
+            )
+        finally:
+            release_first.set()
+            DB.drop("thread_counter")
+            DB.close()
+
+    def test_async_tasks_cannot_share_active_transaction(self):
+        db_url = os.environ["POSTGRES_URL"]
+        DB = postgres.Postgres(db_url)
+        DB.drop("async_guard_table")
+        DB.create(
+            "async_guard_table",
+            [
+                "id BIGINT PRIMARY KEY",
+                "value TEXT NOT NULL",
+            ],
+        )
+        DB.insert("async_guard_table", id=1, value="before")
+
+        async def exercise():
+            first_inside = asyncio.Event()
+            allow_first_to_finish = asyncio.Event()
+            failures = []
+
+            async def first():
+                with DB.transaction():
+                    DB.update(
+                        "async_guard_table",
+                        {"value": "inside"},
+                        where={"id": 1},
+                    )
+                    first_inside.set()
+                    await allow_first_to_finish.wait()
+
+            async def second():
+                await first_inside.wait()
+
+                try:
+                    DB.select("async_guard_table", "*", where={"id": 1})
+                except RuntimeError as exc:
+                    failures.append(str(exc))
+                else:
+                    self.fail("another asyncio task accessed an active transaction")
+
+                try:
+                    with DB.transaction():
+                        pass
+                except RuntimeError as exc:
+                    failures.append(str(exc))
+                else:
+                    self.fail("another asyncio task entered an active transaction")
+
+                allow_first_to_finish.set()
+
+            await asyncio.gather(first(), second())
+            self.assertEqual(2, len(failures))
+            self.assertTrue(
+                all("owned by another execution context" in msg for msg in failures)
+            )
+
+        try:
+            asyncio.run(exercise())
+            self.assertEqual(
+                [{"value": "inside"}],
+                DB.select("async_guard_table", ["value"], where={"id": 1}),
+            )
+        finally:
+            DB.drop("async_guard_table")
             DB.close()
