@@ -1,10 +1,25 @@
+import asyncio
 from contextlib import contextmanager
+from functools import wraps
 import re
 import sqlite3
+import threading
 
 from . import sql
 
 _COLNAME_RE = re.compile(r'^\s*(?:[`"\[])?([A-Za-z_][A-Za-z0-9_]*)')
+
+
+def _connection_locked(method):
+    """Serialize access to the shared sqlite3 connection."""
+
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._lock:
+            self._assert_transaction_owner()
+            return method(self, *args, **kwargs)
+
+    return wrapped
 
 
 class Sqlite3:
@@ -13,9 +28,29 @@ class Sqlite3:
         self._conn = sqlite3.connect(
             self.path, check_same_thread=not self.is_threadsafe()
         )
+        self._lock = threading.RLock()
         self._transaction_depth = 0
         self._savepoint_counter = 0
         self._in_transaction = False
+        self._transaction_owner = None
+
+    def _execution_owner(self):
+        """Return the current thread/task identity for transaction ownership."""
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        return threading.get_ident(), task
+
+    def _assert_transaction_owner(self):
+        if (
+            self._transaction_depth > 0
+            and self._transaction_owner != self._execution_owner()
+        ):
+            raise RuntimeError(
+                "SQLite connection is owned by another execution context's "
+                "transaction"
+            )
 
     def _commit(self):
         if self._transaction_depth == 0:
@@ -34,40 +69,64 @@ class Sqlite3:
         """
         Execute a group of operations atomically.
 
-        The outermost transaction owns the connection-level BEGIN/COMMIT/ROLLBACK.
-        Nested transactions use SQLite savepoints, so an inner failure rolls back
-        only the inner block if the caller catches the exception.
+        The outermost transaction holds the connection lock for its complete
+        scope and starts with BEGIN IMMEDIATE so competing SQLite connections
+        cannot both take a stale read snapshot before attempting to write.
+
+        Nested transactions from the same execution context use savepoints.
+        A different thread waits for the outer transaction to finish. A
+        different asyncio task on the same thread fails fast instead of being
+        mistaken for a nested transaction.
 
         Existing per-call commit behavior is preserved outside this context.
         """
-        outermost = self._transaction_depth == 0
-        savepoint = None
+        with self._lock:
+            owner = self._execution_owner()
+            if (
+                self._transaction_depth > 0
+                and self._transaction_owner != owner
+            ):
+                raise RuntimeError(
+                    "SQLite connection is owned by another execution context's "
+                    "transaction"
+                )
 
-        if outermost:
-            self._conn.execute("BEGIN")
-        else:
-            savepoint = self._next_savepoint()
-            self._conn.execute(f"SAVEPOINT {savepoint}")
+            outermost = self._transaction_depth == 0
+            savepoint = None
 
-        self._transaction_depth += 1
-        self._in_transaction = True
-        try:
-            yield self
             if outermost:
-                self._conn.commit()
+                self._transaction_owner = owner
+                try:
+                    self._conn.execute("BEGIN IMMEDIATE")
+                except Exception:
+                    self._transaction_owner = None
+                    raise
             else:
-                self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-        except Exception:
-            if outermost:
-                self._conn.rollback()
-            else:
-                self._conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
-                self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-            raise
-        finally:
-            self._transaction_depth -= 1
-            self._in_transaction = self._transaction_depth > 0
+                savepoint = self._next_savepoint()
+                self._conn.execute(f"SAVEPOINT {savepoint}")
 
+            self._transaction_depth += 1
+            self._in_transaction = True
+            try:
+                yield self
+                if outermost:
+                    self._conn.commit()
+                else:
+                    self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            except Exception:
+                if outermost:
+                    self._conn.rollback()
+                else:
+                    self._conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                raise
+            finally:
+                self._transaction_depth -= 1
+                self._in_transaction = self._transaction_depth > 0
+                if outermost:
+                    self._transaction_owner = None
+
+    @_connection_locked
     def exec(self, query, args=None):
         try:
             self._conn.execute(query, args or ())
@@ -76,6 +135,7 @@ class Sqlite3:
             self._rollback()
             raise
 
+    @_connection_locked
     def execs(self, query_args_pairs):
         try:
             for q, qargs in query_args_pairs:
@@ -99,9 +159,11 @@ class Sqlite3:
         finally:
             mem.close()
 
+    @_connection_locked
     def close(self):
         self._conn.close()
 
+    @_connection_locked
     def drop(self, *table_names):
         try:
             for tbl in table_names:
@@ -111,6 +173,7 @@ class Sqlite3:
             self._rollback()
             raise
 
+    @_connection_locked
     def create(self, table_name, props):
         try:
             self._conn.execute(sql.create_q(table_name, props))
@@ -120,6 +183,7 @@ class Sqlite3:
             self._rollback()
             return False
 
+    @_connection_locked
     def _column_exists(self, table_name, column_name):
         cur = self._conn.execute(f"PRAGMA table_info({table_name})")
         try:
@@ -132,6 +196,7 @@ class Sqlite3:
         m = _COLNAME_RE.match(col_def)
         return m.group(1) if m else col_def.strip().split()[0]
 
+    @_connection_locked
     def add_column(self, table_name, col_def):
         col_name = self._extract_colname(col_def)
         try:
@@ -144,6 +209,7 @@ class Sqlite3:
             self._rollback()
             return False
 
+    @_connection_locked
     def index(self, index_name, table_name, columns, unique=False, where=None):
         """
         Create an index idempotently.
@@ -180,6 +246,7 @@ class Sqlite3:
             self._rollback()
             return False
 
+    @_connection_locked
     def delete_index(self, index_name):
         """
         Drop an index idempotently.
@@ -192,6 +259,7 @@ class Sqlite3:
             self._rollback()
             return False
 
+    @_connection_locked
     def unique(self, index_name, table_name, columns):
         """
         Ensure a unique index exists on (columns) for table_name.
@@ -226,6 +294,7 @@ class Sqlite3:
             self._rollback()
             return False
 
+    @_connection_locked
     def select(
         self,
         table_name,
@@ -297,6 +366,7 @@ class Sqlite3:
         finally:
             c.close()
 
+    @_connection_locked
     def insert(self, table_name, **args):
         c = self._conn.cursor()
         try:
@@ -334,6 +404,7 @@ class Sqlite3:
         finally:
             c.close()
 
+    @_connection_locked
     def update(self, table_name, bindings, where):
         c = self._conn.cursor()
         try:
@@ -348,6 +419,7 @@ class Sqlite3:
         finally:
             c.close()
 
+    @_connection_locked
     def delete(self, table_name, where):
         c = self._conn.cursor()
         try:

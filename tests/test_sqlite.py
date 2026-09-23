@@ -1,5 +1,8 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import sqlite3
 import tempfile
+import threading
 import unittest
 
 from src.pytrivialsql import sqlite
@@ -307,6 +310,279 @@ class TestDBInteraction(unittest.TestCase):
                     where={"value": ["outer rolled back", "inner would commit"]},
                 )
                 self.assertEqual([], rolled_back_values)
+            finally:
+                db.close()
+
+    def test_shared_connection_transactions_serialize_across_threads(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as f:
+            db = sqlite.Sqlite3(f.name)
+            if not db.is_threadsafe():
+                db.close()
+                self.skipTest("SQLite build is not serialized/thread-safe")
+
+            self.assertTrue(
+                db.create(
+                    "counter",
+                    [
+                        "id INTEGER PRIMARY KEY",
+                        "value INTEGER NOT NULL",
+                    ],
+                )
+            )
+            db.insert("counter", id=1, value=0)
+
+            first_inside = threading.Event()
+            release_first = threading.Event()
+            second_attempting = threading.Event()
+            second_inside = threading.Event()
+
+            def first():
+                with db.transaction():
+                    row = db.select("counter", "*", where={"id": 1})[0]
+                    first_inside.set()
+                    self.assertTrue(release_first.wait(2))
+                    db.update(
+                        "counter",
+                        {"value": row["value"] + 1},
+                        where={"id": 1},
+                    )
+
+            def second():
+                self.assertTrue(first_inside.wait(2))
+                second_attempting.set()
+                with db.transaction():
+                    second_inside.set()
+                    row = db.select("counter", "*", where={"id": 1})[0]
+                    db.update(
+                        "counter",
+                        {"value": row["value"] + 1},
+                        where={"id": 1},
+                    )
+
+            try:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    first_future = pool.submit(first)
+                    second_future = pool.submit(second)
+
+                    self.assertTrue(second_attempting.wait(2))
+                    self.assertFalse(second_inside.wait(0.1))
+
+                    release_first.set()
+                    first_future.result(timeout=2)
+                    second_future.result(timeout=2)
+
+                self.assertTrue(second_inside.is_set())
+                self.assertEqual(
+                    2,
+                    db.select("counter", "*", where={"id": 1})[0]["value"],
+                )
+            finally:
+                release_first.set()
+                db.close()
+
+    def test_shared_connection_operations_wait_for_other_thread_transaction(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as f:
+            db = sqlite.Sqlite3(f.name)
+            if not db.is_threadsafe():
+                db.close()
+                self.skipTest("SQLite build is not serialized/thread-safe")
+
+            self.assertTrue(
+                db.create(
+                    "items",
+                    [
+                        "id INTEGER PRIMARY KEY",
+                        "value TEXT NOT NULL",
+                    ],
+                )
+            )
+            db.insert("items", id=1, value="before")
+
+            first_inside = threading.Event()
+            release_first = threading.Event()
+            reader_attempting = threading.Event()
+            reader_done = threading.Event()
+            observed = []
+
+            def writer():
+                with db.transaction():
+                    db.update("items", {"value": "after"}, where={"id": 1})
+                    first_inside.set()
+                    self.assertTrue(release_first.wait(2))
+
+            def reader():
+                self.assertTrue(first_inside.wait(2))
+                reader_attempting.set()
+                observed.extend(db.select("items", ["value"], where={"id": 1}))
+                reader_done.set()
+
+            try:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    writer_future = pool.submit(writer)
+                    reader_future = pool.submit(reader)
+
+                    self.assertTrue(reader_attempting.wait(2))
+                    self.assertFalse(reader_done.wait(0.1))
+
+                    release_first.set()
+                    writer_future.result(timeout=2)
+                    reader_future.result(timeout=2)
+
+                self.assertEqual([{"value": "after"}], observed)
+            finally:
+                release_first.set()
+                db.close()
+
+    def test_begin_immediate_serializes_separate_connections(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as f:
+            first_db = sqlite.Sqlite3(f.name)
+            second_db = sqlite.Sqlite3(f.name)
+
+            if not first_db.is_threadsafe() or not second_db.is_threadsafe():
+                first_db.close()
+                second_db.close()
+                self.skipTest("SQLite build is not serialized/thread-safe")
+
+            self.assertTrue(
+                first_db.create(
+                    "counter",
+                    [
+                        "id INTEGER PRIMARY KEY",
+                        "value INTEGER NOT NULL",
+                    ],
+                )
+            )
+            first_db.insert("counter", id=1, value=0)
+
+            first_inside = threading.Event()
+            release_first = threading.Event()
+            second_attempting = threading.Event()
+            second_inside = threading.Event()
+
+            def first():
+                with first_db.transaction():
+                    row = first_db.select("counter", "*", where={"id": 1})[0]
+                    first_inside.set()
+                    self.assertTrue(release_first.wait(2))
+                    first_db.update(
+                        "counter",
+                        {"value": row["value"] + 1},
+                        where={"id": 1},
+                    )
+
+            def second():
+                self.assertTrue(first_inside.wait(2))
+                second_attempting.set()
+                with second_db.transaction():
+                    second_inside.set()
+                    row = second_db.select("counter", "*", where={"id": 1})[0]
+                    second_db.update(
+                        "counter",
+                        {"value": row["value"] + 1},
+                        where={"id": 1},
+                    )
+
+            try:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    first_future = pool.submit(first)
+                    second_future = pool.submit(second)
+
+                    self.assertTrue(second_attempting.wait(2))
+                    self.assertFalse(second_inside.wait(0.1))
+
+                    release_first.set()
+                    first_future.result(timeout=2)
+                    second_future.result(timeout=2)
+
+                self.assertTrue(second_inside.is_set())
+                self.assertEqual(
+                    2,
+                    first_db.select("counter", "*", where={"id": 1})[0]["value"],
+                )
+            finally:
+                release_first.set()
+                first_db.close()
+                second_db.close()
+
+    def test_async_tasks_cannot_share_active_transaction(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as f:
+            db = sqlite.Sqlite3(f.name)
+            self.assertTrue(
+                db.create(
+                    "async_table",
+                    [
+                        "id INTEGER PRIMARY KEY",
+                        "value TEXT NOT NULL",
+                    ],
+                )
+            )
+            db.insert("async_table", id=1, value="before")
+
+            async def exercise():
+                first_inside = asyncio.Event()
+                second_done = asyncio.Event()
+                allow_first_to_finish = asyncio.Event()
+                failures = []
+
+                async def first():
+                    with db.transaction():
+                        db.update(
+                            "async_table",
+                            {"value": "inside"},
+                            where={"id": 1},
+                        )
+                        first_inside.set()
+                        await allow_first_to_finish.wait()
+
+                async def second():
+                    await first_inside.wait()
+
+                    try:
+                        db.select("async_table", "*", where={"id": 1})
+                    except RuntimeError as exc:
+                        failures.append(str(exc))
+                    else:
+                        self.fail(
+                            "another asyncio task accessed an active transaction"
+                        )
+
+                    try:
+                        with db.transaction():
+                            pass
+                    except RuntimeError as exc:
+                        failures.append(str(exc))
+                    else:
+                        self.fail(
+                            "another asyncio task entered an active transaction"
+                        )
+
+                    second_done.set()
+                    allow_first_to_finish.set()
+
+                await asyncio.gather(first(), second())
+                self.assertTrue(second_done.is_set())
+                self.assertEqual(2, len(failures))
+                self.assertTrue(
+                    all("owned by another execution context" in msg for msg in failures)
+                )
+
+                # Re-entrant/nested transaction use in one asyncio task remains
+                # valid; only cross-task access to an active transaction is
+                # rejected.
+                with db.transaction():
+                    with db.transaction():
+                        db.update(
+                            "async_table",
+                            {"value": "nested in same task"},
+                            where={"id": 1},
+                        )
+
+            try:
+                asyncio.run(exercise())
+                self.assertEqual(
+                    [{"value": "nested in same task"}],
+                    db.select("async_table", ["value"], where={"id": 1}),
+                )
             finally:
                 db.close()
 
